@@ -83,331 +83,19 @@
 #endif 
 
 
-
-
 // definitions outside the main.
-
 int conf_id_iter;
 int verbosity_lv;
+unsigned int myseed_default;
 
-int main(int argc, char* argv[]){
- 
-  gettimeofday ( &(mc_params.start_time), NULL );
-
-#ifdef PAR_TEMP
-  FILE *hmc_acc_file;
-  FILE *swap_acc_file;
-  FILE *file_label;
-#endif
- 
-  srand(time(NULL));
-
-  if(argc!=2){
-    if(0==devinfo.myrank_world) print_geom_defines();
-    if(0==devinfo.myrank_world) printf("\n\nERROR! Use mpirun -n <num_tasks> %s input_file to execute the code!\n\n", argv[0]);
-    exit(EXIT_FAILURE);			
-  }
-    
-  // read input file.
-#ifdef MULTIDEVICE
-	pre_init_multidev1D(&devinfo);
-	gdbhook();
-#else
-	devinfo.replica_idx=0;
-#endif
-  
-  if(0==devinfo.myrank_world){
-    printf("****************************************************\n");
-		if (argc!=2) printf("          COMPILATION INFO                        \n");
-    if (argc==2) printf("          PRE INIT - READING SETTING  FILE          \n");
-    if (argc==2) printf("     check which parameter corresponds to what! \n");
-    printf("commit: %s\n", xstr(COMMIT_HASH) );
-    printf("****************************************************\n");
-  }
-  
-  if (ACTION_TYPE == TLSM ){
-    if(0==devinfo.myrank_world) printf("\nCOMPILED WITH TREE-LEVEL SYMANZIK IMPROVED GAUGE ACTION\n\n");
-  }else{ // ACTION_TYPE == WILSON
-    if(0==devinfo.myrank_world) printf("COMPILED WITH WILSON GAUGE ACTION\n\n");
-  }
+int main_loop(int argc, char* argv[]){
 
 #ifdef PAR_TEMP
-  if(0==devinfo.myrank_world) printf("COMPILED FOR PARALLEL TEMPERING ON BOUNDARY CONDITIONS\n\n");
-#else
-  if(0==devinfo.myrank_world) printf("COMPILED WITHOUT PARALLEL TEMPERING (1 REPLICA RUN)\n\n");
-#endif
-
-  
-
-  int input_file_read_check = set_global_vars_and_fermions_from_input_file(argv[1]);
-
-#ifdef MULTIDEVICE
-  if(input_file_read_check){
-    MPI_PRINTF0("input file reading failed, Aborting...\n");
-    MPI_Abort(MPI_COMM_WORLD,1);
-  }else init_multidev1D(&devinfo);
-#else
-  devinfo.myrank = 0;
-  devinfo.nranks = 1;
-#endif
-
-	if(input_file_read_check){
-		MPI_PRINTF0("input file reading failed, aborting...\n");
-		exit(1);
-	}
-
-	if(0==devinfo.myrank_world) print_geom_defines();
-	verbosity_lv = debug_settings.input_vbl;
-
-	if(0==devinfo.myrank_world){
-		if(0 != mc_params.JarzynskiMode){
-			printf("****************************************************\n");
-			printf("                   JARZYNSKI MODE              \n");
-			printf("     check which parameter corresponds to what! \n");
-			printf("****************************************************\n");
-		}
-	}
-
-	// initialization
-#ifdef PAR_TEMP
-	int *all_swap_vector;
-  int *acceptance_vector;
-  double mean_acceptance;
-  int *acceptance_vector_old;
-    
-  //TODO: in principle, these can be allocated on world master only (see src/OpenAcc/HPT_utilities.c)
-  all_swap_vector=malloc(sizeof(int)*rep->replicas_total_number-1);
-  acceptance_vector=malloc(sizeof(int)*rep->replicas_total_number-1);
-  acceptance_vector_old=malloc(sizeof(int)*rep->replicas_total_number-1);
-    
-  for(int lab=0;lab<rep->replicas_total_number-1;lab++){
-    acceptance_vector[lab]=0;
-    acceptance_vector_old[lab]=0;
-    all_swap_vector[lab]=0;
-  }
-#endif
-
-  // just printing headtitles
-  if(0==devinfo.myrank_world){
-    if(0 != mc_params.JarzynskiMode){
-      printf("****************************************************\n");
-      printf("                   JARZYNSKI MODE              \n");
-      printf("     check which parameter corresponds to what! \n");
-      printf("****************************************************\n");
-
-
-    }else {
-      printf("****************************************************\n");
-      printf("                    NORMAL MODE                \n");
-      printf("****************************************************\n");
-    }
-    if(debug_settings.do_norandom_test){
-      printf("****************************************************\n");
-      printf("         WELCOME. This is a NORANDOM test.    \n");
-      printf("     MOST things will not be random generated,\n");
-      printf("            but read from memory instead.     \n");
-      printf("                  CHECK THE CODE!!            \n");
-      printf("   ALSO: setting the number of trajectories to 1.\n");
-      printf("****************************************************\n");
-      mc_params.ntraj = 1;
-
-    }
-  }
-
-  if(verbosity_lv > 2) 
-    MPI_PRINTF0("Input file read and initialized multidev1D...\n");
-
-#ifndef __GNUC__
-  // OpenAcc context initialization
-  // NVIDIA GPUs
-  acc_device_t my_device_type = acc_device_nvidia;
-  // AMD GPUs
-  // acc_device_t my_device_type = acc_device_radeon;
-  // Intel XeonPhi
-  // acc_device_t my_device_type = acc_device_xeonphi;
-  // Select device ID
-  MPI_PRINTF0("Selecting device.\n");
-#ifdef MULTIDEVICE
-  select_init_acc_device(my_device_type, (devinfo.single_dev_choice + devinfo.myrank_world)%devinfo.proc_per_node);
-#else
-  select_init_acc_device(my_device_type, devinfo.single_dev_choice);
-#endif
-  printf("Device Selected : OK \n"); //checking printing.
-#endif
-
-  unsigned int myseed_default =  (unsigned int) mc_params.seed; 
-
-#ifdef MULTIDEVICE
-  myseed_default =  (unsigned int) (myseed_default + devinfo.myrank_world) ;
-  char myrank_string[6];
-  sprintf(myrank_string,".R%d",devinfo.myrank_world);
-  strcat(mc_params.RandGenStatusFilename,myrank_string);
-#endif
-
-  initrand_fromfile(mc_params.RandGenStatusFilename,myseed_default);
-
-  // init ferm params and read rational approx coeffs
-  if(init_ferm_params(fermions_parameters)){
-    MPI_PRINTF0("Finalizing...\n"); //cp
-#ifdef MULTIDEVICE
-    MPI_Finalize();
-#endif
-    exit(1);
-  }
-	#pragma acc enter data copyin(fermions_parameters[0:alloc_info.NDiffFlavs])
-    
-  mem_alloc_core();
-  mem_alloc_extended();
- 
-  // single/double precision allocation
-  MPI_PRINTF0("Memory allocation (double) : OK \n\n\n");
-  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
-    mem_alloc_core_f();
-    MPI_PRINTF0("Memory allocation (float) [CORE]: OK \n\n\n");
-  }
-
-  if( md_parameters.singlePrecMD){
-    mem_alloc_extended_f();
-    MPI_PRINTF0("Memory allocation (float) [EXTENDED]: OK \n\n\n");
-  }
-   
-  MPI_PRINTF1("Total allocated memory: %zu \n\n\n",max_memory_used);
-  
-	gl_stout_rho=act_params.stout_rho;
-	gl_topo_rho=act_params.topo_rho;
-	#pragma acc enter data copyin(gl_stout_rho)
-	#pragma acc enter data copyin(gl_topo_rho)
-  compute_nnp_and_nnm_openacc();
-
-	#pragma acc enter data copyin(nnp_openacc)
-	#pragma acc enter data copyin(nnm_openacc)
-  MPI_PRINTF0("nn computation : OK\n");
-  init_all_u1_phases(backfield_parameters,fermions_parameters);
-	#pragma acc update device(u1_back_phases[0:8*alloc_info.NDiffFlavs])
-	#pragma acc update device(mag_obs_re[0:8*alloc_info.NDiffFlavs])
-	#pragma acc update device(mag_obs_im[0:8*alloc_info.NDiffFlavs])
-
-  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
-		#pragma acc update device(u1_back_phases_f[0:8*alloc_info.NDiffFlavs])
-  }
-
-  MPI_PRINTF0("u1_backfield initialization (float & double): OK \n");
-
-  initialize_md_global_variables(md_parameters);
-  MPI_PRINTF0("init md vars : OK \n");
-
-	
-#ifdef PAR_TEMP
-	defect_info def;
-  char rep_str [20];
-  char aux_name_file[200];
-  strcpy(aux_name_file,mc_params.save_conf_name);
-#endif
-	
-	{
-    int replica_idx;
-#ifdef PAR_TEMP
-    replica_idx=devinfo.replica_idx;
-    snprintf(rep_str,20,"replica_%d",replica_idx);
-		strcat(mc_params.save_conf_name,rep_str);
-#else
-		replica_idx=0;
-#endif
-		
-    if(debug_settings.do_norandom_test){
-      if(!read_conf_wrapper(conf_acc,"conf_norndtest",&conf_id_iter,debug_settings.use_ildg)){
-				MPI_PRINTF0("Stored Gauge Conf conf_norndtest Read : OK\n");
-      }
-      else{
-				// cold start
-				MPI_PRINTF0("COMPILED IN NORANDOM MODE. A CONFIGURATION FILE NAMED \"conf_norndtest\" MUST BE PRESENT\n");
-				exit(1);
-      }
-    }else{
-      if(!read_conf_wrapper(conf_acc,mc_params.save_conf_name,
-														&conf_id_iter,debug_settings.use_ildg)){
-				MPI_PRINTF1("Stored Gauge Conf \"%s\" Read : OK \n", mc_params.save_conf_name);
-      }else{
-				generate_Conf_cold(conf_acc,mc_params.eps_gen);
-				MPI_PRINTF0("Cold Gauge Conf Generated : OK \n");
-				conf_id_iter=0;
-      }
-    }
-
-
-#ifdef PAR_TEMP
-    if(conf_id_iter==0){
-      // first label initialization
-      for(int ri=0; ri<rep->replicas_total_number; ++ri)
-        rep->label[ri]=ri;
-      if(devinfo.myrank_world ==0){ // write first labeling (usual increasing order)
-        file_label=fopen(acc_info->file_label_name,"at");
-        if(!file_label){file_label=fopen(acc_info->file_label_name,"wt");} // create label file
-
-        label_print(rep, file_label, conf_id_iter); // populate it
-        fclose(file_label);
-      }
-      if (0==devinfo.myrank_world) printf("%d/%d Defect initialization\n",replica_idx,rep->replicas_total_number); 
-    }else{ // not first iteration: initialize boundaries from label file
-      if(devinfo.myrank_world ==0){ // read labeling from file
-        file_label=fopen(acc_info->file_label_name,"r");
-        if(!file_label){ 
-          printf("\n\nERROR! Cannot open label file.\n\n");
-#ifdef MULTIDEVICE
-          MPI_Abort(MPI_COMM_WORLD,1);			
-#else
-          exit(EXIT_FAILURE);			
-#endif
-        }else{ // file exists
-          // read label file
-          int itr_num=-1,trash_bin;
-          printf("conf_id_iter: %d\n",conf_id_iter);
-          while(fscanf(file_label,"%d",&itr_num)==1){
-            printf("%d ",itr_num);
-            for(int idx=0; idx<NREPLICAS; ++idx){
-              fscanf(file_label,"%d",(itr_num==conf_id_iter)? &(rep->label[idx]) : &trash_bin);
-              printf("%d ",(itr_num==conf_id_iter)? (rep->label[idx]) : trash_bin);
-            }
-            printf("\n");
-          }
-          fclose(file_label);
-        }
-      }
-      // broadcast it to all replicas and ranks 
-      MPI_Bcast((void*)&(rep->label[0]),NREPLICAS,MPI_INT,0,MPI_COMM_WORLD);
-    }
-		strcpy(mc_params.save_conf_name,aux_name_file);
-		
-    init_k(conf_acc,rep->cr_vec[rep->label[replica_idx]],rep->defect_boundary,rep->defect_coordinates,&def,0);
-#if NRANKS_D3 > 1
-    if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep->label[replica_idx]],rep->defect_boundary,rep->defect_coordinates,&def,1);
-#endif
-		#pragma acc update device(conf_acc[0:alloc_info.conf_acc_size])
-
-		if(md_parameters.singlePrecMD){
-			convert_double_to_float_su3_soa(conf_acc,conf_acc_f);
-			//^^ NOTE: doing this because a K initialization for su3_soa_f doesn't exist. Please create it.
-#if NRANKS_D3 > 1
-			if(devinfo.async_comm_gauge){
-				convert_double_to_float_su3_soa(&conf_acc[8],&conf_acc_f[8]);
-				//^^ NOTE: doing this because a K initialization for su3_soa_f doesn't exist. Please create it.
-			}
-#endif
-			
-			#pragma acc update host(conf_acc_f[0:alloc_info.conf_acc_size])
-		}
-#else // no PAR_TEMP
-		#pragma acc update device(conf_acc[0:alloc_info.conf_acc_size])
-#endif
-  }
-
-#ifdef PAR_TEMP
-
   int vec_aux_bound[3]={1,1,1};
 
 	if (0==devinfo.myrank_world) printf("Auxiliary confs defect initialization\n");
-  init_k(aux_conf_acc,1,0,vec_aux_bound,&def,1);
-  init_k(auxbis_conf_acc,1,0,vec_aux_bound,&def,1);
+  init_k(aux_conf_acc,1,0,vec_aux_bound,&r_utils->def,1);
+  init_k(auxbis_conf_acc,1,0,vec_aux_bound,&r_utils->def,1);
 	#pragma acc update device(aux_conf_acc[0:8])
 	#pragma acc update device(auxbis_conf_acc[0:8])
 
@@ -422,7 +110,7 @@ int main(int argc, char* argv[]){
 		int stout_steps = ((act_params.topo_stout_steps>act_params.stout_steps) & (act_params.topo_action==1)?
 											  act_params.topo_stout_steps:act_params.stout_steps );
 		for (int i = 0; i < stout_steps; i++)
-			init_k(&gstout_conf_acc_arr[8*i],1,0,vec_aux_bound,&def,1);
+			init_k(&gstout_conf_acc_arr[8*i],1,0,vec_aux_bound,&r_utils->def,1);
 		#pragma acc update device(gstout_conf_acc_arr[0:8*stout_steps])
 		if(md_parameters.singlePrecMD){
 			for (int i = 0; i < stout_steps; i++)
@@ -746,7 +434,7 @@ int main(int argc, char* argv[]){
 							// conf swap
 							if (0==devinfo.myrank_world) {printf("CONF SWAP PROPOSED\n");}
               #pragma acc update host(conf_acc[0:alloc_info.conf_acc_size])
-              manage_replica_swaps(conf_acc, aux_conf_acc, local_sums, &def, &swap_number,all_swap_vector,acceptance_vector,rep);
+              manage_replica_swaps(conf_acc, aux_conf_acc, local_sums, &r_utils->def, &swap_number,all_swap_vector,acceptance_vector,rep);
 
 							if (0==devinfo.myrank_world) {printf("Number of accepted swaps: %d\n", swap_number);}       
 							#pragma acc update host(conf_acc[0:8])
@@ -948,8 +636,8 @@ int main(int argc, char* argv[]){
 						if(conf_id_iter%mc_params.saveconfinterval==0){
             {
 #ifdef PAR_TEMP        
-							snprintf(rep_str,20,"replica_%d",devinfo.replica_idx);
-							strcat(mc_params.save_conf_name,rep_str);
+							snprintf(r_utils->rep_str,20,"replica_%d",devinfo.replica_idx);
+							strcat(mc_params.save_conf_name,r_utils->rep_str);
 #endif
 							if (debug_settings.SaveAllAtEnd){
 								MPI_PRINTF1("Saving conf %s.\n", mc_params.save_conf_name);
@@ -1190,8 +878,8 @@ int main(int argc, char* argv[]){
   // saving gauge conf and RNG status to file
   {
 #ifdef PAR_TEMP
-    snprintf(rep_str,20,"replica_%d",devinfo.replica_idx); // initialize rep_str
-    strcat(mc_params.save_conf_name,rep_str); // append rep_str
+    snprintf(r_utils->rep_str,20,"replica_%d",devinfo.replica_idx); // initialize rep_str
+    strcat(mc_params.save_conf_name,r_utils->rep_str); // append rep_str
 #endif
 		
     if (debug_settings.SaveAllAtEnd){
@@ -1252,9 +940,291 @@ int main(int argc, char* argv[]){
       all=all->next;
     };
 
+  return(EXIT_SUCCESS);
+}
+
+void initial_setup(){
+  gettimeofday ( &(mc_params.start_time), NULL );
+
+  srand(time(NULL));
+
+  if(argc!=2){
+    if(0==devinfo.myrank_world) print_geom_defines();
+    if(0==devinfo.myrank_world) printf("\n\nERROR! Use mpirun -n <num_tasks> %s input_file to execute the code!\n\n", argv[0]);
+    exit(EXIT_FAILURE);			
+  }
+    
+  // read input file.
+#ifdef MULTIDEVICE
+	pre_init_multidev1D(&devinfo);
+	gdbhook();
+#else
+	devinfo.replica_idx=0;
+#endif
+  
+  if(0==devinfo.myrank_world){
+    printf("****************************************************\n");
+		if (argc!=2) printf("          COMPILATION INFO                        \n");
+    if (argc==2) printf("          PRE INIT - READING SETTING  FILE          \n");
+    if (argc==2) printf("     check which parameter corresponds to what! \n");
+    printf("commit: %s\n", xstr(COMMIT_HASH) );
+    printf("****************************************************\n");
+  }
+  
+  if (ACTION_TYPE == TLSM ){
+    if(0==devinfo.myrank_world) printf("\nCOMPILED WITH TREE-LEVEL SYMANZIK IMPROVED GAUGE ACTION\n\n");
+  }else{ // ACTION_TYPE == WILSON
+    if(0==devinfo.myrank_world) printf("COMPILED WITH WILSON GAUGE ACTION\n\n");
+  }
+
+#ifdef PAR_TEMP
+  if(0==devinfo.myrank_world) printf("COMPILED FOR PARALLEL TEMPERING ON BOUNDARY CONDITIONS\n\n");
+#else
+  if(0==devinfo.myrank_world) printf("COMPILED WITHOUT PARALLEL TEMPERING (1 REPLICA RUN)\n\n");
+#endif
+
+  // this allocates stuff, also rep and r_utils
+  int input_file_read_check = set_global_vars_and_fermions_from_input_file(argv[1]);
+
+#ifdef MULTIDEVICE
+  if(input_file_read_check){
+    MPI_PRINTF0("input file reading failed, Aborting...\n");
+    MPI_Abort(MPI_COMM_WORLD,1);
+  }else init_multidev1D(&devinfo);
+#else
+  devinfo.myrank = 0;
+  devinfo.nranks = 1;
+#endif
+
+	if(input_file_read_check){
+		MPI_PRINTF0("input file reading failed, aborting...\n");
+		exit(1);
+	}
+
+	if(0==devinfo.myrank_world) print_geom_defines();
+	verbosity_lv = debug_settings.input_vbl;
+
+  // just printing headtitles
+  if(0==devinfo.myrank_world){
+    if(0 != mc_params.JarzynskiMode){
+      printf("****************************************************\n");
+      printf("                   JARZYNSKI MODE              \n");
+      printf("     check which parameter corresponds to what! \n");
+      printf("****************************************************\n");
+
+
+    }else {
+      printf("****************************************************\n");
+      printf("                    NORMAL MODE                \n");
+      printf("****************************************************\n");
+    }
+    if(debug_settings.do_norandom_test){
+      printf("****************************************************\n");
+      printf("         WELCOME. This is a NORANDOM test.    \n");
+      printf("     MOST things will not be random generated,\n");
+      printf("            but read from memory instead.     \n");
+      printf("                  CHECK THE CODE!!            \n");
+      printf("   ALSO: setting the number of trajectories to 1.\n");
+      printf("****************************************************\n");
+      mc_params.ntraj = 1;
+
+    }
+  }
+
+  if(verbosity_lv > 2) 
+    MPI_PRINTF0("Input file read and initialized multidev1D...\n");
+
+#ifndef __GNUC__
+  // OpenAcc context initialization
+  // NVIDIA GPUs
+#define MY_DEVICE_TYPE acc_device_nvidia
+  // AMD GPUs
+  //#define MY_DEVICE_TYPE acc_device_radeon
+  // Intel XeonPhi
+  //#define MY_DEVICE_TYPE acc_device_xeonphi
+  // Select device ID
+  MPI_PRINTF0("Selecting device.\n");
+#ifdef MULTIDEVICE
+  select_init_acc_device(MY_DEVICE_TYPE, (devinfo.single_dev_choice + devinfo.myrank_world)%devinfo.proc_per_node);
+#else
+  select_init_acc_device(MY_DEVICE_TYPE, devinfo.single_dev_choice);
+#endif
+  printf("Device Selected : OK \n"); //checking printing.
+#endif
+
+
+#ifdef PAR_TEMP
+    setup_replica_utils();
+#endif
+
+  myseed_default =  (unsigned int) mc_params.seed; 
+
+#ifdef MULTIDEVICE
+  myseed_default =  (unsigned int) (myseed_default + devinfo.myrank_world) ;
+  char myrank_string[6];
+  sprintf(myrank_string,".R%d",devinfo.myrank_world);
+  strcat(mc_params.RandGenStatusFilename,myrank_string);
+#endif
+
+  initrand_fromfile(mc_params.RandGenStatusFilename,myseed_default);
+
+  // init ferm params and read rational approx coeffs
+  if(init_ferm_params(fermions_parameters)){
+    MPI_PRINTF0("Finalizing...\n"); //cp
+#ifdef MULTIDEVICE
+    MPI_Finalize();
+#endif
+    exit(1);
+  }
+	#pragma acc enter data copyin(fermions_parameters[0:alloc_info.NDiffFlavs])
+    
+  mem_alloc_core();
+  mem_alloc_extended();
+ 
+  // single/double precision allocation
+  MPI_PRINTF0("Memory allocation (double) : OK \n\n\n");
+  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
+    mem_alloc_core_f();
+    MPI_PRINTF0("Memory allocation (float) [CORE]: OK \n\n\n");
+  }
+
+  if( md_parameters.singlePrecMD){
+    mem_alloc_extended_f();
+    MPI_PRINTF0("Memory allocation (float) [EXTENDED]: OK \n\n\n");
+  }
+   
+  MPI_PRINTF1("Total allocated memory: %zu \n\n\n",max_memory_used);
+  
+	gl_stout_rho=act_params.stout_rho;
+	gl_topo_rho=act_params.topo_rho;
+	#pragma acc enter data copyin(gl_stout_rho)
+	#pragma acc enter data copyin(gl_topo_rho)
+  compute_nnp_and_nnm_openacc();
+
+	#pragma acc enter data copyin(nnp_openacc)
+	#pragma acc enter data copyin(nnm_openacc)
+  MPI_PRINTF0("nn computation : OK\n");
+  init_all_u1_phases(backfield_parameters,fermions_parameters);
+	#pragma acc update device(u1_back_phases[0:8*alloc_info.NDiffFlavs])
+	#pragma acc update device(mag_obs_re[0:8*alloc_info.NDiffFlavs])
+	#pragma acc update device(mag_obs_im[0:8*alloc_info.NDiffFlavs])
+
+  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
+		#pragma acc update device(u1_back_phases_f[0:8*alloc_info.NDiffFlavs])
+  }
+
+  MPI_PRINTF0("u1_backfield initialization (float & double): OK \n");
+
+  initialize_md_global_variables(md_parameters);
+  MPI_PRINTF0("init md vars : OK \n");
+
+
+  {
+    int replica_idx;
+#ifdef PAR_TEMP
+    replica_idx=devinfo.replica_idx;
+    snprintf(r_utils->rep_str,20,"replica_%d",replica_idx);
+		strcat(mc_params.save_conf_name,r_utils->rep_str);
+#else
+		replica_idx=0;
+#endif
+		
+    if(debug_settings.do_norandom_test){
+      if(!read_conf_wrapper(conf_acc,"conf_norndtest",&conf_id_iter,debug_settings.use_ildg)){
+				MPI_PRINTF0("Stored Gauge Conf conf_norndtest Read : OK\n");
+      }
+      else{
+				// cold start
+				MPI_PRINTF0("COMPILED IN NORANDOM MODE. A CONFIGURATION FILE NAMED \"conf_norndtest\" MUST BE PRESENT\n");
+				exit(1);
+      }
+    }else{
+      if(!read_conf_wrapper(conf_acc,mc_params.save_conf_name,
+														&conf_id_iter,debug_settings.use_ildg)){
+				MPI_PRINTF1("Stored Gauge Conf \"%s\" Read : OK \n", mc_params.save_conf_name);
+      }else{
+				generate_Conf_cold(conf_acc,mc_params.eps_gen);
+				MPI_PRINTF0("Cold Gauge Conf Generated : OK \n");
+				conf_id_iter=0;
+      }
+    }
+
+
+#ifdef PAR_TEMP
+    if(conf_id_iter==0){
+      // first label initialization
+      for(int ri=0; ri<rep->replicas_total_number; ++ri)
+        rep->label[ri]=ri;
+      if(devinfo.myrank_world ==0){ // write first labeling (usual increasing order)
+        file_label=fopen(acc_info->file_label_name,"at");
+        if(!file_label){file_label=fopen(acc_info->file_label_name,"wt");} // create label file
+
+        label_print(rep, file_label, conf_id_iter); // populate it
+        fclose(file_label);
+      }
+      if (0==devinfo.myrank_world) printf("%d/%d Defect initialization\n",replica_idx,rep->replicas_total_number); 
+    }else{ // not first iteration: initialize boundaries from label file
+      if(devinfo.myrank_world ==0){ // read labeling from file
+        file_label=fopen(acc_info->file_label_name,"r");
+        if(!file_label){ 
+          printf("\n\nERROR! Cannot open label file.\n\n");
+#ifdef MULTIDEVICE
+          MPI_Abort(MPI_COMM_WORLD,1);			
+#else
+          exit(EXIT_FAILURE);			
+#endif
+        }else{ // file exists
+          // read label file
+          int itr_num=-1,trash_bin;
+          printf("conf_id_iter: %d\n",conf_id_iter);
+          while(fscanf(file_label,"%d",&itr_num)==1){
+            printf("%d ",itr_num);
+            for(int idx=0; idx<NREPLICAS; ++idx){
+              fscanf(file_label,"%d",(itr_num==conf_id_iter)? &(rep->label[idx]) : &trash_bin);
+              printf("%d ",(itr_num==conf_id_iter)? (rep->label[idx]) : trash_bin);
+            }
+            printf("\n");
+          }
+          fclose(file_label);
+        }
+      }
+      // broadcast it to all replicas and ranks 
+      MPI_Bcast((void*)&(rep->label[0]),NREPLICAS,MPI_INT,0,MPI_COMM_WORLD);
+    }
+		strcpy(mc_params.save_conf_name,aux_name_file);
+		
+    init_k(conf_acc,rep->cr_vec[rep->label[replica_idx]],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,0);
+#if NRANKS_D3 > 1
+    if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep->label[replica_idx]],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
+#endif
+		#pragma acc update device(conf_acc[0:alloc_info.conf_acc_size])
+
+		if(md_parameters.singlePrecMD){
+			convert_double_to_float_su3_soa(conf_acc,conf_acc_f);
+			//^^ NOTE: doing this because a K initialization for su3_soa_f doesn't exist. Please create it.
+#if NRANKS_D3 > 1
+			if(devinfo.async_comm_gauge){
+				convert_double_to_float_su3_soa(&conf_acc[8],&conf_acc_f[8]);
+				//^^ NOTE: doing this because a K initialization for su3_soa_f doesn't exist. Please create it.
+			}
+#endif
+			
+			#pragma acc update host(conf_acc_f[0:alloc_info.conf_acc_size])
+		}
+#else // no PAR_TEMP
+		#pragma acc update device(conf_acc[0:alloc_info.conf_acc_size])
+#endif
+  }
+
+}
+
+
+
+void cleanup(){
+
 #ifndef __GNUC__
   // OpenAcc context closing
-  shutdown_acc_device(my_device_type);
+  shutdown_acc_device(MY_DEVICE_TYPE);
 #endif
 
 #ifdef MULTIDEVICE
@@ -1262,5 +1232,16 @@ int main(int argc, char* argv[]){
 #endif
     
   if(0==devinfo.myrank_world){printf("The End\n");}
-  return(EXIT_SUCCESS);
+}
+
+
+
+
+int main(int argc, char* argv[]){
+
+    initial_setup();
+
+    main_loop(argc,argv);
+
+    cleanup();
 }

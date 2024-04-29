@@ -4,6 +4,7 @@
 #include "./rep_info.h"
 
 rep_info *rep;
+rep_utils *r_utils;
 
 int get_index_of_pbc_replica(){
   // finds index corresponding to label=0
@@ -11,6 +12,25 @@ int get_index_of_pbc_replica(){
   for(ridx_lab0=0; 0!=rep->label[ridx_lab0]; ++ridx_lab0){}
 
   return ridx_lab0;
+}
+
+void setup_replica_utils(){
+  //TODO: in principle, these can be allocated on world master only (see src/OpenAcc/HPT_utilities.c)
+  r_utils->all_swap_vector=malloc(sizeof(int)*rep->replicas_total_number-1);
+  r_utils->acceptance_vector=malloc(sizeof(int)*rep->replicas_total_number-1);
+  r_utils->acceptance_vector_old=malloc(sizeof(int)*rep->replicas_total_number-1);
+    
+  for(int lab=0;lab<rep->replicas_total_number-1;lab++){
+    r_utils->acceptance_vector[lab]=0;
+    r_utils->acceptance_vector_old[lab]=0;
+    r_utils->all_swap_vector[lab]=0;
+  }
+
+#ifdef PAR_TEMP
+  //defect_info def;
+  strcpy(r_utils->aux_name_file,mc_params.save_conf_name);
+#endif
+
 }
 
 #endif

@@ -958,6 +958,7 @@ int set_global_vars_and_fermions_from_input_file(const char* input_filename)
 		printf("last\n");
 
 		rep = (rep_info*) malloc(sizeof(rep_info));
+		r_utils = (rep_utils*) malloc(sizeof(rep_utils));
 		acc_info = (accept_info*) malloc(sizeof(accept_info));
         
 		// see global var in /Include/fermion_parameters.
