@@ -41,6 +41,20 @@
 #error "ACTION_TYPE must be specified in geom_defines (either TLSM or WILSON)"
 #endif
 
+#define HEATBATH_ALGO 0 
+#define HMC_ALGO 1 
+
+#ifndef ALGO
+#define ALGO HMC_ALGO // defaults HMC as the original implementation
+#endif
+//TODO: check validity of other variables (e.g., no fermions for HEATBATH_ALGO)
+
+#define SU3_GROUP 3
+#ifndef N_SUN_GROUP
+#define N_SUN_GROUP SU3_GROUP
+#endif
+//TODO: check validity of other variables 
+
 #if ACTION_TYPE==TLSM
 #define GAUGE_ACT_TLSM
 #elif ACTION_TYPE==WILSON
