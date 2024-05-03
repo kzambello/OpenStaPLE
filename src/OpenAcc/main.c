@@ -83,10 +83,15 @@
 #endif 
 
 
-// definitions outside the main.
+//TODO: maybe encapsulate these into some structure with global access
+// global variables 
 int conf_id_iter;
 int verbosity_lv;
 unsigned int myseed_default;
+
+int loc_max_update_times, glob_max_update_times;
+int loc_max_flavour_cycle_times, glob_max_flavour_cycle_times;
+int loc_max_run_times, glob_max_run_times;
 
 int main_loop(){
 
@@ -232,9 +237,9 @@ int main_loop(){
   int id_iter=id_iter_offset;
     
   init_global_program_status(); 
-  int loc_max_update_times=0, glob_max_update_times;
-  int loc_max_flavour_cycle_times=0, glob_max_flavour_cycle_times;
-  int loc_max_run_times=0, glob_max_run_times;
+  loc_max_update_times=0;
+  loc_max_flavour_cycle_times=0;
+  loc_max_run_times=0;
 
   printf("run_condition: %d\n",mc_params.run_condition) ;
   if ( 0 != mc_params.ntraj ) {
@@ -875,72 +880,6 @@ int main_loop(){
       } // while id_iter loop ends here             
   } // closes if (0 != mc_params.ntraj)
     
-  // saving gauge conf and RNG status to file
-  {
-#ifdef PAR_TEMP
-    snprintf(r_utils->rep_str,20,"replica_%d",devinfo.replica_idx); // initialize rep_str
-    strcat(mc_params.save_conf_name,r_utils->rep_str); // append rep_str
-#endif
-		
-    if (debug_settings.SaveAllAtEnd){
-      MPI_PRINTF1("Saving conf %s.\n", mc_params.save_conf_name);
-      save_conf_wrapper(conf_acc,mc_params.save_conf_name, conf_id_iter, debug_settings.use_ildg);
-    }else MPI_PRINTF0("WARNING, \'SaveAllAtEnd\'=0,NOT SAVING/OVERWRITING CONF AND RNG STATUS.\n\n\n");
-#ifdef PAR_TEMP
-    strcpy(mc_params.save_conf_name,aux_name_file);
-#endif
-	} // end replicas 
-	
-	if (debug_settings.SaveAllAtEnd){
-		MPI_PRINTF1("Saving rng status in %s.\n", mc_params.RandGenStatusFilename);
-  saverand_tofile(mc_params.RandGenStatusFilename);
-	}
-
-  if(0 == devinfo.myrank_world && debug_settings.SaveAllAtEnd){
-    save_global_program_status(mc_params, glob_max_update_times,glob_max_flavour_cycle_times); // WARNING: this function in some cases does not work
-  }
-
-  MPI_PRINTF0("Double precision free [CORE]\n");
-  mem_free_core();
-    
-  MPI_PRINTF0("Double precision free [EXTENDED]\n");
-  mem_free_extended();
-
-  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
-    MPI_PRINTF0("Single precision free [CORE]\n");
-    mem_free_core_f();
-  }
-  if( md_parameters.singlePrecMD){
-    MPI_PRINTF0("Signle precision free [EXTENDED]\n");
-    mem_free_extended_f();
-  }
-
-#ifdef PAR_TEMP
-  free(all_swap_vector);
-  free(acceptance_vector);
-
-  // freeing rep_info vectors
-  free(rep->cr_vec);
-  free(rep->label);
-#endif
-	
-  MPI_PRINTF0("freeing device nnp and nnm\n");
-	#pragma acc exit data delete(nnp_openacc)
-	#pragma acc exit data delete(nnm_openacc)
-	#pragma acc exit data delete(gl_stout_rho)
-	#pragma acc exit data delete(gl_topo_rho)
-
-  MPI_PRINTF1("Allocated memory before the shutdown: %zu \n\n\n",memory_used);
-  struct memory_allocated_t *all=memory_allocated_base;
-    
-  while(all!=NULL)
-    {
-      MPI_PRINTF1("To be deallocated: %s having size %zu (or maybe is to be counted)\n\n\n",all->varname,all->size);
-      // free_wrapper(all->ptr);
-      all=all->next;
-    };
-
-  return(EXIT_SUCCESS);
 }
 
 void initial_setup(int argc, char* argv[]){
@@ -1221,6 +1160,70 @@ void initial_setup(int argc, char* argv[]){
 
 
 void cleanup(){
+  // saving gauge conf and RNG status to file
+  {
+#ifdef PAR_TEMP
+    snprintf(r_utils->rep_str,20,"replica_%d",devinfo.replica_idx); // initialize rep_str
+    strcat(mc_params.save_conf_name,r_utils->rep_str); // append rep_str
+#endif
+		
+    if (debug_settings.SaveAllAtEnd){
+      MPI_PRINTF1("Saving conf %s.\n", mc_params.save_conf_name);
+      save_conf_wrapper(conf_acc,mc_params.save_conf_name, conf_id_iter, debug_settings.use_ildg);
+    }else MPI_PRINTF0("WARNING, \'SaveAllAtEnd\'=0,NOT SAVING/OVERWRITING CONF AND RNG STATUS.\n\n\n");
+#ifdef PAR_TEMP
+    strcpy(mc_params.save_conf_name,aux_name_file);
+#endif
+	} // end replicas 
+	
+	if (debug_settings.SaveAllAtEnd){
+		MPI_PRINTF1("Saving rng status in %s.\n", mc_params.RandGenStatusFilename);
+  saverand_tofile(mc_params.RandGenStatusFilename);
+	}
+
+  if(0 == devinfo.myrank_world && debug_settings.SaveAllAtEnd){
+    save_global_program_status(mc_params, glob_max_update_times,glob_max_flavour_cycle_times); // WARNING: this function in some cases does not work
+  }
+
+  MPI_PRINTF0("Double precision free [CORE]\n");
+  mem_free_core();
+    
+  MPI_PRINTF0("Double precision free [EXTENDED]\n");
+  mem_free_extended();
+
+  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
+    MPI_PRINTF0("Single precision free [CORE]\n");
+    mem_free_core_f();
+  }
+  if( md_parameters.singlePrecMD){
+    MPI_PRINTF0("Signle precision free [EXTENDED]\n");
+    mem_free_extended_f();
+  }
+
+#ifdef PAR_TEMP
+  free(all_swap_vector);
+  free(acceptance_vector);
+
+  // freeing rep_info vectors
+  free(rep->cr_vec);
+  free(rep->label);
+#endif
+	
+  MPI_PRINTF0("freeing device nnp and nnm\n");
+	#pragma acc exit data delete(nnp_openacc)
+	#pragma acc exit data delete(nnm_openacc)
+	#pragma acc exit data delete(gl_stout_rho)
+	#pragma acc exit data delete(gl_topo_rho)
+
+  MPI_PRINTF1("Allocated memory before the shutdown: %zu \n\n\n",memory_used);
+  struct memory_allocated_t *all=memory_allocated_base;
+    
+  while(all!=NULL)
+    {
+      MPI_PRINTF1("To be deallocated: %s having size %zu (or maybe is to be counted)\n\n\n",all->varname,all->size);
+      // free_wrapper(all->ptr);
+      all=all->next;
+    };
 
 #ifndef __GNUC__
   // OpenAcc context closing
@@ -1239,9 +1242,11 @@ void cleanup(){
 
 int main(int argc, char* argv[]){
 
-    initial_setup(argc,argv);
+  initial_setup(argc,argv);
 
-    main_loop();
+  main_loop();
 
-    cleanup();
+  cleanup();
+
+  return(EXIT_SUCCESS);
 }
