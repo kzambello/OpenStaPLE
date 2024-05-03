@@ -957,8 +957,11 @@ int set_global_vars_and_fermions_from_input_file(const char* input_filename)
         
 		printf("last\n");
 
+    //TODO: remove also rep_info if PAR_TEMP is not defined
 		rep = (rep_info*) malloc(sizeof(rep_info));
+#ifdef PAR_TEMP
 		r_utils = (rep_utils*) malloc(sizeof(rep_utils));
+#endif // PAR_TEMP
 		acc_info = (accept_info*) malloc(sizeof(accept_info));
         
 		// see global var in /Include/fermion_parameters.

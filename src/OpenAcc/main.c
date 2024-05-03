@@ -88,7 +88,7 @@ int conf_id_iter;
 int verbosity_lv;
 unsigned int myseed_default;
 
-int main_loop(int argc, char* argv[]){
+int main_loop(){
 
 #ifdef PAR_TEMP
   int vec_aux_bound[3]={1,1,1};
@@ -943,7 +943,7 @@ int main_loop(int argc, char* argv[]){
   return(EXIT_SUCCESS);
 }
 
-void initial_setup(){
+void initial_setup(int argc, char* argv[]){
   gettimeofday ( &(mc_params.start_time), NULL );
 
   srand(time(NULL));
@@ -1239,9 +1239,9 @@ void cleanup(){
 
 int main(int argc, char* argv[]){
 
-    initial_setup();
+    initial_setup(argc,argv);
 
-    main_loop(argc,argv);
+    main_loop();
 
     cleanup();
 }

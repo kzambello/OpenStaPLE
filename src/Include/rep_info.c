@@ -4,6 +4,7 @@
 #include "./rep_info.h"
 
 rep_info *rep;
+#ifdef PAR_TEMP
 rep_utils *r_utils;
 
 int get_index_of_pbc_replica(){
@@ -26,11 +27,10 @@ void setup_replica_utils(){
     r_utils->all_swap_vector[lab]=0;
   }
 
-#ifdef PAR_TEMP
   //defect_info def;
   strcpy(r_utils->aux_name_file,mc_params.save_conf_name);
-#endif
 
 }
+#endif // PAR_TEMP
 
 #endif

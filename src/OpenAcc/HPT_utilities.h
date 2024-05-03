@@ -32,7 +32,7 @@ typedef struct defect_info_t{
 
 } defect_info;
 
-extern defect_info *def;
+//extern defect_info *def;
 
 void counter_size_function(int d0,int d1,int d2,int d3);
 void init_k(su3_soa * conf,double c_r,int def_axis,int * def_vec,defect_info * def, int defect_info_config);

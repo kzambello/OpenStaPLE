@@ -20,6 +20,7 @@ int get_index_of_pbc_replica();
 void setup_replica_utils();
 
 
+#ifdef PAR_TEMP
 typedef struct rep_utils_t {
   FILE *hmc_acc_file;
   FILE *swap_acc_file;
@@ -34,5 +35,6 @@ typedef struct rep_utils_t {
   char aux_name_file[200];
 } rep_utils;
 extern rep_utils *r_utils;
+#endif // PAR_TEMP
 
-#endif
+#endif // REP_INFO_H
