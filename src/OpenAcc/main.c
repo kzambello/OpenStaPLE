@@ -9,6 +9,16 @@
 
 #ifndef __GNUC__
 #include "openacc.h"
+
+// OpenAcc context initialization
+// NVIDIA GPUs
+#define MY_DEVICE_TYPE acc_device_nvidia
+// AMD GPUs
+//#define MY_DEVICE_TYPE acc_device_radeon
+// Intel XeonPhi
+//#define MY_DEVICE_TYPE acc_device_xeonphi
+// Select device ID
+
 #endif
 
 #ifdef ONE_FILE_COMPILATION
@@ -86,6 +96,7 @@
 //TODO: maybe encapsulate these into some structure with global access
 // global variables 
 int conf_id_iter;
+int id_iter,id_iter_offset;
 int verbosity_lv;
 unsigned int myseed_default;
 
@@ -93,56 +104,91 @@ int loc_max_update_times, glob_max_update_times;
 int loc_max_flavour_cycle_times, glob_max_flavour_cycle_times;
 int loc_max_run_times, glob_max_run_times;
 
-int main_loop(){
 
-#ifdef PAR_TEMP
-  int vec_aux_bound[3]={1,1,1};
+void check_and_update_run_condition(){
+  if(0 == devinfo.myrank_world && RUN_CONDITION_TERMINATE != mc_params.run_condition){ 
+   
+    // program exits if it finds a file called "stop"
 
-	if (0==devinfo.myrank_world) printf("Auxiliary confs defect initialization\n");
-  init_k(aux_conf_acc,1,0,vec_aux_bound,&r_utils->def,1);
-  init_k(auxbis_conf_acc,1,0,vec_aux_bound,&r_utils->def,1);
-	#pragma acc update device(aux_conf_acc[0:8])
-	#pragma acc update device(auxbis_conf_acc[0:8])
+    FILE * test_stop = fopen("stop","r");
+    if(test_stop){
+      fclose(test_stop);
+      printf("File  \'stop\' found, stopping cycle now.\n");
+      mc_params.run_condition = RUN_CONDITION_TERMINATE;
+    }
 
-	if(md_parameters.singlePrecMD){
-		convert_double_to_float_su3_soa(aux_conf_acc,aux_conf_acc_f);
-		convert_double_to_float_su3_soa(auxbis_conf_acc,auxbis_conf_acc_f);
-		#pragma acc update host(aux_conf_acc_f[0:8])
-		#pragma acc update host(auxbis_conf_acc_f[0:8])
-	}
+    // program exits if time is running out
+      
+    struct timeval now;
+    gettimeofday(&now,NULL);
+    double total_duration = (double) 
+      (now.tv_sec - mc_params.start_time.tv_sec)+
+      (double)(now.tv_usec - mc_params.start_time.tv_usec)/1.0e6;
 
-	if(alloc_info.stoutAllocations){
-		int stout_steps = ((act_params.topo_stout_steps>act_params.stout_steps) & (act_params.topo_action==1)?
-											  act_params.topo_stout_steps:act_params.stout_steps );
-		for (int i = 0; i < stout_steps; i++)
-			init_k(&gstout_conf_acc_arr[8*i],1,0,vec_aux_bound,&r_utils->def,1);
-		#pragma acc update device(gstout_conf_acc_arr[0:8*stout_steps])
-		if(md_parameters.singlePrecMD){
-			for (int i = 0; i < stout_steps; i++)
-				convert_double_to_float_su3_soa(&gstout_conf_acc_arr[8*i],&gstout_conf_acc_arr_f[8*i]);
-			#pragma acc update host(gstout_conf_acc_arr_f[0:8*stout_steps])
-		}
-	}
-#endif
-	
-  double max_unitarity_deviation,avg_unitarity_deviation;
-    
-  check_unitarity_host(conf_acc,&max_unitarity_deviation,&avg_unitarity_deviation);
-  MPI_PRINTF1("Avg_unitarity_deviation on host: %e\n", avg_unitarity_deviation);
-  MPI_PRINTF1("Max_unitarity_deviation on host: %e\n", max_unitarity_deviation);
-	
-  // measures
-    
+    double max_expected_duration_with_another_cycle;
+    if(GPSTATUS_UPDATE == mc_params.next_gps){
+      max_expected_duration_with_another_cycle = 
+        total_duration + 1.3*glob_max_update_times;
+      printf("Next step, update : %ds\n",(int) glob_max_update_times);
+    }
+    if(GPSTATUS_FERMION_MEASURES == mc_params.next_gps){
+      max_expected_duration_with_another_cycle = 
+        total_duration + 2*glob_max_flavour_cycle_times;
+      printf("Next step, flavour measure cycle : %ds\n",
+             (int) glob_max_flavour_cycle_times);
+    }
+
+    if(max_expected_duration_with_another_cycle > glob_max_run_times){
+      printf("Time is running out (%d of %d seconds elapsed),",
+             (int) total_duration, (int) glob_max_run_times);
+      printf(" shutting down now.\n");
+      printf("Total max expected duration: %d seconds",
+             (int) max_expected_duration_with_another_cycle);
+      printf("(%d elapsed now)\n",(int) total_duration);
+      // https://www.youtube.com/watch?v=MfGhlVcrc8U
+      // but without that much pathos
+      mc_params.run_condition = RUN_CONDITION_TERMINATE;
+    }
+
+    // program exits if MaxConfIdIter is reached
+    if(conf_id_iter >= mc_params.MaxConfIdIter ){
+
+      printf("%s - MaxConfIdIter=%d reached, job done!",
+             devinfo.myrankstr, mc_params.MaxConfIdIter);
+      printf("%s - shutting down now.\n", devinfo.myrankstr);
+      mc_params.run_condition = RUN_CONDITION_TERMINATE;
+    }
+    // program exits if MTraj is reached
+    if(id_iter >= (mc_params.ntraj+id_iter_offset)){
+      printf("%s - NTraj=%d reached, job done!",
+             devinfo.myrankstr, mc_params.ntraj);
+      printf("%s - shutting down now.\n", devinfo.myrankstr);
+      mc_params.run_condition = RUN_CONDITION_TERMINATE;
+    }
+    if (0==mc_params.ntraj) {
+      printf("%s - NTraj=%d reached, job done!",
+             devinfo.myrankstr, mc_params.ntraj);
+      printf("%s - shutting down now.\n", devinfo.myrankstr);
+      mc_params.run_condition = RUN_CONDITION_TERMINATE;
+    }
+  }
+}
+
+
+
+void main_loop(){
+  // measurement buffers
   double plq,rect;
   double cool_topo_ch[meastopo_params.coolmeasstep/meastopo_params.cool_measinterval+1];
   double stout_topo_ch[meastopo_params.stoutmeasstep/meastopo_params.stout_measinterval+1];
   d_complex poly;
 
+  // acceptance buffers //TODO: encapsulate into structure
   int rankloc_accettate_therm=0;
   int rankloc_accettate_metro=0;
   int rankloc_accettate_therm_old;
   int rankloc_accettate_metro_old;
-  int id_iter_offset=conf_id_iter;
+  id_iter_offset=conf_id_iter;
 
 #ifdef PAR_TEMP
   int *accettate_therm;
@@ -170,8 +216,7 @@ int main_loop(){
   // plaquette measures and polyakov loop measures.
   printf("PLAQUETTE START\n");
     
-  IF_PERIODIC_REPLICA()
-  {
+  IF_PERIODIC_REPLICA(){
     plq = calc_plaquette_soloopenacc(conf_acc,aux_conf_acc,local_sums);
     MPI_PRINTF1("Therm_iter %d Placchetta    = %.18lf \n", conf_id_iter,plq/GL_SIZE/6.0/3.0);
   }
@@ -179,8 +224,7 @@ int main_loop(){
   printf("PLAQUETTE END\n");
 
 #if !defined(GAUGE_ACT_WILSON) || !(NRANKS_D3 > 1)
-  IF_PERIODIC_REPLICA()
-  {
+  IF_PERIODIC_REPLICA(){
     rect = calc_rettangolo_soloopenacc(conf_acc,aux_conf_acc,local_sums);
     MPI_PRINTF1("Therm_iter %d Rettangolo = %.18lf \n", conf_id_iter,rect/GL_SIZE/6.0/3.0/2.0);
   }
@@ -188,22 +232,18 @@ int main_loop(){
   MPI_PRINTF0("multidevice rectangle computation with Wilson action not implemented\n");
 #endif
 
-  IF_PERIODIC_REPLICA()
-  {
+  IF_PERIODIC_REPLICA(){
     poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);
     MPI_PRINTF1("Therm_iter %d Polyakov Loop = (%.18lf, %.18lf)  \n", conf_id_iter,creal(poly),cimag(poly));
   }
 	
-  //Here we are in Jarzynski mode.
-    
   if(0 == mc_params.ntraj && 0 == mc_params.JarzynskiMode ){ // measures only
       
     printf("\n#################################################\n");
     printf("\tMEASUREMENTS ONLY ON FILE %s\n", mc_params.save_conf_name);
     printf("\n#################################################\n");
 
-    IF_PERIODIC_REPLICA()
-    {
+    IF_PERIODIC_REPLICA(){
       // gauge stuff measures
       printf("Gauge Measures:\n");
       plq = calc_plaquette_soloopenacc(conf_acc,aux_conf_acc,local_sums);
@@ -234,14 +274,14 @@ int main_loop(){
      
   // thermalization & metropolis updates
 
-  int id_iter=id_iter_offset;
+  id_iter=id_iter_offset;
     
   init_global_program_status(); 
   loc_max_update_times=0;
   loc_max_flavour_cycle_times=0;
   loc_max_run_times=0;
 
-  printf("run_condition: %d\n",mc_params.run_condition) ;
+  printf("run_condition: %d\n",mc_params.run_condition);
   if ( 0 != mc_params.ntraj ) {
     while ( RUN_CONDITION_TERMINATE != mc_params.run_condition)
       {
@@ -293,16 +333,15 @@ int main_loop(){
 						printf("Jarzynski mode's end\n");
 					}
 
-
-					check_unitarity_device(conf_acc,&max_unitarity_deviation,
-																 &avg_unitarity_deviation);
+          double avg_unitarity_deviation,max_unitarity_deviation;
+					check_unitarity_device(conf_acc,&max_unitarity_deviation, &avg_unitarity_deviation);
 					MPI_PRINTF1("Avg/Max unitarity deviation on device: %e / %e\n",avg_unitarity_deviation,max_unitarity_deviation);
             
           if(0==devinfo.myrank_world){
 #ifdef PAR_TEMP
             for (int lab=0;lab<rep->replicas_total_number;lab++){
-              accettate_therm_old [lab]= accettate_therm[lab];
-              accettate_metro_old [lab]= accettate_metro[lab];
+              accettate_therm_old[lab]= accettate_therm[lab];
+              accettate_metro_old[lab]= accettate_metro[lab];
             }
 #else
             rankloc_accettate_therm_old= rankloc_accettate_therm;
@@ -329,9 +368,8 @@ int main_loop(){
 					// replicas update - hpt step
          {
 #ifdef PAR_TEMP
-            int replica_idx=devinfo.replica_idx;
-            int lab=rep->label[replica_idx];
-						printf("REPLICA %d (index %d):\n",lab,replica_idx);
+            int lab=rep->label[devinfo.replica_idx];
+						printf("REPLICA %d (index %d):\n",lab,devinfo.replica_idx);
 #endif
 
 						// initial action
@@ -344,7 +382,7 @@ int main_loop(){
 #endif
 
 #ifdef PAR_TEMP
-							printf("ACTION BEFORE HMC STEP REPLICA %d (idx %d): %.15lg\n", lab, replica_idx, action);
+							printf("ACTION BEFORE HMC STEP REPLICA %d (idx %d): %.15lg\n", lab, devinfo.replica_idx, action);
 #else
 							printf("ACTION BEFORE HMC STEP: %.15lg\n", action);
 #endif
@@ -713,8 +751,8 @@ int main_loop(){
 
 					}
 
-					check_unitarity_device(conf_acc,&max_unitarity_deviation,
-																 &avg_unitarity_deviation);
+          double avg_unitarity_deviation, max_unitarity_deviation;
+					check_unitarity_device(conf_acc,&max_unitarity_deviation, &avg_unitarity_deviation);
 					MPI_PRINTF1("Avg/Max unitarity deviation on device: %e / %e\n",avg_unitarity_deviation,max_unitarity_deviation);
 
           IF_PERIODIC_REPLICA()
@@ -795,73 +833,8 @@ int main_loop(){
         glob_max_run_times= loc_max_run_times;
 #endif
 
-        // determining run condition
-        if(0 == devinfo.myrank_world && RUN_CONDITION_TERMINATE != mc_params.run_condition){
-         
-					// program exits if it finds a file called "stop"
-
-					FILE * test_stop = fopen("stop","r");
-					if(test_stop){
-						fclose(test_stop);
-						printf("File  \'stop\' found, stopping cycle now.\n");
-						mc_params.run_condition = RUN_CONDITION_TERMINATE;
-					}
-
-					// program exits if time is running out
-            
-					struct timeval now;
-					gettimeofday(&now,NULL);
-					double total_duration = (double) 
-						(now.tv_sec - mc_params.start_time.tv_sec)+
-						(double)(now.tv_usec - mc_params.start_time.tv_usec)/1.0e6;
-
-					double max_expected_duration_with_another_cycle;
-					if(GPSTATUS_UPDATE == mc_params.next_gps){
-						max_expected_duration_with_another_cycle = 
-							total_duration + 1.3*glob_max_update_times;
-						printf("Next step, update : %ds\n",(int) glob_max_update_times);
-					}
-					if(GPSTATUS_FERMION_MEASURES == mc_params.next_gps){
-						max_expected_duration_with_another_cycle = 
-							total_duration + 2*glob_max_flavour_cycle_times;
-						printf("Next step, flavour measure cycle : %ds\n",
-									 (int) glob_max_flavour_cycle_times);
-					}
-
-					if(max_expected_duration_with_another_cycle > glob_max_run_times){
-						printf("Time is running out (%d of %d seconds elapsed),",
-									 (int) total_duration, (int) glob_max_run_times);
-						printf(" shutting down now.\n");
-						printf("Total max expected duration: %d seconds",
-									 (int) max_expected_duration_with_another_cycle);
-						printf("(%d elapsed now)\n",(int) total_duration);
-						// https://www.youtube.com/watch?v=MfGhlVcrc8U
-						// but without that much pathos
-						mc_params.run_condition = RUN_CONDITION_TERMINATE;
-					}
-
-					// program exits if MaxConfIdIter is reached
-					if(conf_id_iter >= mc_params.MaxConfIdIter ){
-
-						printf("%s - MaxConfIdIter=%d reached, job done!",
-									 devinfo.myrankstr, mc_params.MaxConfIdIter);
-						printf("%s - shutting down now.\n", devinfo.myrankstr);
-						mc_params.run_condition = RUN_CONDITION_TERMINATE;
-					}
-					// program exits if MTraj is reached
-					if( id_iter >= (mc_params.ntraj+id_iter_offset)){
-						printf("%s - NTraj=%d reached, job done!",
-									 devinfo.myrankstr, mc_params.ntraj);
-						printf("%s - shutting down now.\n", devinfo.myrankstr);
-						mc_params.run_condition = RUN_CONDITION_TERMINATE;
-					}
-					if (0==mc_params.ntraj) {
-						printf("%s - NTraj=%d reached, job done!",
-									 devinfo.myrankstr, mc_params.ntraj);
-						printf("%s - shutting down now.\n", devinfo.myrankstr);
-						mc_params.run_condition = RUN_CONDITION_TERMINATE;
-					}
-        }
+        // check update run condition and print times
+        check_and_update_run_condition();
 
 #ifdef MULTIDEVICE
         MPI_Bcast((void*)&(mc_params.run_condition),1,MPI_INT,0,MPI_COMM_WORLD);
@@ -879,193 +852,13 @@ int main_loop(){
 #endif
       } // while id_iter loop ends here             
   } // closes if (0 != mc_params.ntraj)
-    
 }
 
-void initial_setup(int argc, char* argv[]){
-  gettimeofday ( &(mc_params.start_time), NULL );
 
-  srand(time(NULL));
-
-  if(argc!=2){
-    if(0==devinfo.myrank_world) print_geom_defines();
-    if(0==devinfo.myrank_world) printf("\n\nERROR! Use mpirun -n <num_tasks> %s input_file to execute the code!\n\n", argv[0]);
-    exit(EXIT_FAILURE);			
-  }
-    
-  // read input file.
-#ifdef MULTIDEVICE
-	pre_init_multidev1D(&devinfo);
-	gdbhook();
-#else
-	devinfo.replica_idx=0;
-#endif
-  
-  if(0==devinfo.myrank_world){
-    printf("****************************************************\n");
-		if (argc!=2) printf("          COMPILATION INFO                        \n");
-    if (argc==2) printf("          PRE INIT - READING SETTING  FILE          \n");
-    if (argc==2) printf("     check which parameter corresponds to what! \n");
-    printf("commit: %s\n", xstr(COMMIT_HASH) );
-    printf("****************************************************\n");
-  }
-  
-  if (ACTION_TYPE == TLSM ){
-    if(0==devinfo.myrank_world) printf("\nCOMPILED WITH TREE-LEVEL SYMANZIK IMPROVED GAUGE ACTION\n\n");
-  }else{ // ACTION_TYPE == WILSON
-    if(0==devinfo.myrank_world) printf("COMPILED WITH WILSON GAUGE ACTION\n\n");
-  }
-
+void read_or_generate_conf(){
 #ifdef PAR_TEMP
-  if(0==devinfo.myrank_world) printf("COMPILED FOR PARALLEL TEMPERING ON BOUNDARY CONDITIONS\n\n");
-#else
-  if(0==devinfo.myrank_world) printf("COMPILED WITHOUT PARALLEL TEMPERING (1 REPLICA RUN)\n\n");
-#endif
-
-  // this allocates stuff, also rep and r_utils
-  int input_file_read_check = set_global_vars_and_fermions_from_input_file(argv[1]);
-
-#ifdef MULTIDEVICE
-  if(input_file_read_check){
-    MPI_PRINTF0("input file reading failed, Aborting...\n");
-    MPI_Abort(MPI_COMM_WORLD,1);
-  }else init_multidev1D(&devinfo);
-#else
-  devinfo.myrank = 0;
-  devinfo.nranks = 1;
-#endif
-
-	if(input_file_read_check){
-		MPI_PRINTF0("input file reading failed, aborting...\n");
-		exit(1);
-	}
-
-	if(0==devinfo.myrank_world) print_geom_defines();
-	verbosity_lv = debug_settings.input_vbl;
-
-  // just printing headtitles
-  if(0==devinfo.myrank_world){
-    if(0 != mc_params.JarzynskiMode){
-      printf("****************************************************\n");
-      printf("                   JARZYNSKI MODE              \n");
-      printf("     check which parameter corresponds to what! \n");
-      printf("****************************************************\n");
-
-
-    }else {
-      printf("****************************************************\n");
-      printf("                    NORMAL MODE                \n");
-      printf("****************************************************\n");
-    }
-    if(debug_settings.do_norandom_test){
-      printf("****************************************************\n");
-      printf("         WELCOME. This is a NORANDOM test.    \n");
-      printf("     MOST things will not be random generated,\n");
-      printf("            but read from memory instead.     \n");
-      printf("                  CHECK THE CODE!!            \n");
-      printf("   ALSO: setting the number of trajectories to 1.\n");
-      printf("****************************************************\n");
-      mc_params.ntraj = 1;
-
-    }
-  }
-
-  if(verbosity_lv > 2) 
-    MPI_PRINTF0("Input file read and initialized multidev1D...\n");
-
-#ifndef __GNUC__
-  // OpenAcc context initialization
-  // NVIDIA GPUs
-#define MY_DEVICE_TYPE acc_device_nvidia
-  // AMD GPUs
-  //#define MY_DEVICE_TYPE acc_device_radeon
-  // Intel XeonPhi
-  //#define MY_DEVICE_TYPE acc_device_xeonphi
-  // Select device ID
-  MPI_PRINTF0("Selecting device.\n");
-#ifdef MULTIDEVICE
-  select_init_acc_device(MY_DEVICE_TYPE, (devinfo.single_dev_choice + devinfo.myrank_world)%devinfo.proc_per_node);
-#else
-  select_init_acc_device(MY_DEVICE_TYPE, devinfo.single_dev_choice);
-#endif
-  printf("Device Selected : OK \n"); //checking printing.
-#endif
-
-
-#ifdef PAR_TEMP
-    setup_replica_utils();
-#endif
-
-  myseed_default =  (unsigned int) mc_params.seed; 
-
-#ifdef MULTIDEVICE
-  myseed_default =  (unsigned int) (myseed_default + devinfo.myrank_world) ;
-  char myrank_string[6];
-  sprintf(myrank_string,".R%d",devinfo.myrank_world);
-  strcat(mc_params.RandGenStatusFilename,myrank_string);
-#endif
-
-  initrand_fromfile(mc_params.RandGenStatusFilename,myseed_default);
-
-  // init ferm params and read rational approx coeffs
-  if(init_ferm_params(fermions_parameters)){
-    MPI_PRINTF0("Finalizing...\n"); //cp
-#ifdef MULTIDEVICE
-    MPI_Finalize();
-#endif
-    exit(1);
-  }
-	#pragma acc enter data copyin(fermions_parameters[0:alloc_info.NDiffFlavs])
-    
-  mem_alloc_core();
-  mem_alloc_extended();
- 
-  // single/double precision allocation
-  MPI_PRINTF0("Memory allocation (double) : OK \n\n\n");
-  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
-    mem_alloc_core_f();
-    MPI_PRINTF0("Memory allocation (float) [CORE]: OK \n\n\n");
-  }
-
-  if( md_parameters.singlePrecMD){
-    mem_alloc_extended_f();
-    MPI_PRINTF0("Memory allocation (float) [EXTENDED]: OK \n\n\n");
-  }
-   
-  MPI_PRINTF1("Total allocated memory: %zu \n\n\n",max_memory_used);
-  
-	gl_stout_rho=act_params.stout_rho;
-	gl_topo_rho=act_params.topo_rho;
-	#pragma acc enter data copyin(gl_stout_rho)
-	#pragma acc enter data copyin(gl_topo_rho)
-  compute_nnp_and_nnm_openacc();
-
-	#pragma acc enter data copyin(nnp_openacc)
-	#pragma acc enter data copyin(nnm_openacc)
-  MPI_PRINTF0("nn computation : OK\n");
-  init_all_u1_phases(backfield_parameters,fermions_parameters);
-	#pragma acc update device(u1_back_phases[0:8*alloc_info.NDiffFlavs])
-	#pragma acc update device(mag_obs_re[0:8*alloc_info.NDiffFlavs])
-	#pragma acc update device(mag_obs_im[0:8*alloc_info.NDiffFlavs])
-
-  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
-		#pragma acc update device(u1_back_phases_f[0:8*alloc_info.NDiffFlavs])
-  }
-
-  MPI_PRINTF0("u1_backfield initialization (float & double): OK \n");
-
-  initialize_md_global_variables(md_parameters);
-  MPI_PRINTF0("init md vars : OK \n");
-
-
-  {
-    int replica_idx;
-#ifdef PAR_TEMP
-    replica_idx=devinfo.replica_idx;
-    snprintf(r_utils->rep_str,20,"replica_%d",replica_idx);
+    snprintf(r_utils->rep_str,20,"replica_%d",devinfo.replica_idx);
 		strcat(mc_params.save_conf_name,r_utils->rep_str);
-#else
-		replica_idx=0;
 #endif
 		
     if(debug_settings.do_norandom_test){
@@ -1101,7 +894,7 @@ void initial_setup(int argc, char* argv[]){
         label_print(rep, file_label, conf_id_iter); // populate it
         fclose(file_label);
       }
-      if (0==devinfo.myrank_world) printf("%d/%d Defect initialization\n",replica_idx,rep->replicas_total_number); 
+      if (0==devinfo.myrank_world) printf("%d/%d Defect initialization\n",devinfo.replica_idx,rep->replicas_total_number); 
     }else{ // not first iteration: initialize boundaries from label file
       if(devinfo.myrank_world ==0){ // read labeling from file
         file_label=fopen(acc_info->file_label_name,"r");
@@ -1132,9 +925,9 @@ void initial_setup(int argc, char* argv[]){
     }
 		strcpy(mc_params.save_conf_name,aux_name_file);
 		
-    init_k(conf_acc,rep->cr_vec[rep->label[replica_idx]],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,0);
+    init_k(conf_acc,rep->cr_vec[rep->label[devinfo.replica_idx]],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,0);
 #if NRANKS_D3 > 1
-    if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep->label[replica_idx]],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
+    if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep->label[devinfo.replica_idx]],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
 #endif
 		#pragma acc update device(conf_acc[0:alloc_info.conf_acc_size])
 
@@ -1153,15 +946,218 @@ void initial_setup(int argc, char* argv[]){
 #else // no PAR_TEMP
 		#pragma acc update device(conf_acc[0:alloc_info.conf_acc_size])
 #endif
-  }
-
 }
 
 
 
-void cleanup(){
-  // saving gauge conf and RNG status to file
-  {
+void print_compilation_banners(int correct_input_call){
+  if(0==devinfo.myrank_world){
+    printf("****************************************************\n");
+		if (correct_input_call==0) printf("          COMPILATION INFO                        \n");
+    if (correct_input_call==1) printf("          PRE INIT - READING SETTING  FILE          \n");
+    if (correct_input_call==1) printf("     check which parameter corresponds to what! \n");
+    printf("commit: %s\n", xstr(COMMIT_HASH) );
+    printf("****************************************************\n");
+  }
+  
+  if (ACTION_TYPE == TLSM ){
+    if(0==devinfo.myrank_world) printf("\nCOMPILED WITH TREE-LEVEL SYMANZIK IMPROVED GAUGE ACTION\n\n");
+  }else{ // ACTION_TYPE == WILSON
+    if(0==devinfo.myrank_world) printf("COMPILED WITH WILSON GAUGE ACTION\n\n");
+  }
+
+#ifdef PAR_TEMP
+  if(0==devinfo.myrank_world) printf("COMPILED FOR PARALLEL TEMPERING ON BOUNDARY CONDITIONS\n\n");
+#else
+  if(0==devinfo.myrank_world) printf("COMPILED WITHOUT PARALLEL TEMPERING (1 REPLICA RUN)\n\n");
+#endif
+}
+
+
+
+
+void print_mode_banners(){
+  if(0==devinfo.myrank_world){
+    if(0 != mc_params.JarzynskiMode){
+      printf("****************************************************\n");
+      printf("                   JARZYNSKI MODE              \n");
+      printf("     check which parameter corresponds to what! \n");
+      printf("****************************************************\n");
+
+
+    }else {
+      printf("****************************************************\n");
+      printf("                    NORMAL MODE                \n");
+      printf("****************************************************\n");
+    }
+    if(debug_settings.do_norandom_test){
+      printf("****************************************************\n");
+      printf("         WELCOME. This is a NORANDOM test.    \n");
+      printf("     MOST things will not be random generated,\n");
+      printf("            but read from memory instead.     \n");
+      printf("                  CHECK THE CODE!!            \n");
+      printf("   ALSO: setting the number of trajectories to 1.\n");
+      printf("****************************************************\n");
+      mc_params.ntraj = 1;
+
+    }
+  }
+}
+
+
+
+
+void assign_device(){
+#ifndef __GNUC__
+  acc_device_t my_device_type = MY_DEVICE_TYPE;
+  MPI_PRINTF0("Selecting device.\n");
+#ifdef MULTIDEVICE
+  select_init_acc_device(my_device_type, (devinfo.single_dev_choice + devinfo.myrank_world)%devinfo.proc_per_node);
+#else
+  select_init_acc_device(my_device_type, devinfo.single_dev_choice);
+#endif // MULTIDEVICE
+  printf("Device Selected : OK \n"); //checking printing.
+#endif // __GNUC__
+}
+
+
+
+void allocate_memory(){
+  mem_alloc_core();
+  mem_alloc_extended();
+ 
+  // single/double precision allocation
+  MPI_PRINTF0("Memory allocation (double) : OK \n\n\n");
+  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
+    mem_alloc_core_f();
+    MPI_PRINTF0("Memory allocation (float) [CORE]: OK \n\n\n");
+  }
+
+  if( md_parameters.singlePrecMD){
+    mem_alloc_extended_f();
+    MPI_PRINTF0("Memory allocation (float) [EXTENDED]: OK \n\n\n");
+  }
+   
+  MPI_PRINTF1("Total allocated memory: %zu \n\n\n",max_memory_used);
+}
+
+
+
+
+void initial_setup(int argc, char* argv[]){
+  gettimeofday ( &(mc_params.start_time), NULL );
+
+  srand(time(NULL));
+  if(argc!=2){
+    if(0==devinfo.myrank_world) print_geom_defines();
+    if(0==devinfo.myrank_world) printf("\n\nERROR! Use mpirun -n <num_tasks> %s input_file to execute the code!\n\n", argv[0]);
+    exit(EXIT_FAILURE);			
+  }
+    
+#ifdef MULTIDEVICE
+	pre_init_multidev1D(&devinfo);
+	gdbhook();
+#else
+	devinfo.replica_idx=0;
+#endif
+  
+  int correct_input_call=(argc==2)? 1:0;
+  print_compilation_banners(correct_input_call);
+
+  // this allocates stuff, also rep and r_utils
+  int input_file_read_check = set_global_vars_and_fermions_from_input_file(argv[1]);
+
+#ifdef MULTIDEVICE
+  if(input_file_read_check){
+    MPI_PRINTF0("input file reading failed, Aborting...\n");
+    MPI_Abort(MPI_COMM_WORLD,1);
+  }else init_multidev1D(&devinfo);
+#else
+  devinfo.myrank = 0;
+  devinfo.nranks = 1;
+#endif
+
+	if(input_file_read_check){
+		MPI_PRINTF0("input file reading failed, aborting...\n");
+		exit(1);
+	}
+
+	if(0==devinfo.myrank_world) print_geom_defines();
+	verbosity_lv = debug_settings.input_vbl;
+
+  print_mode_banners();
+
+  if(verbosity_lv > 2) 
+    MPI_PRINTF0("Input file read and initialized multidev1D...\n");
+
+  assign_device();
+
+#ifdef PAR_TEMP
+  setup_replica_utils();
+#endif
+
+  // set RNG seed
+  myseed_default =  (unsigned int) mc_params.seed; 
+#ifdef MULTIDEVICE
+  myseed_default =  (unsigned int) (myseed_default + devinfo.myrank_world) ;
+  char myrank_string[6];
+  sprintf(myrank_string,".R%d",devinfo.myrank_world);
+  strcat(mc_params.RandGenStatusFilename,myrank_string);
+#endif
+  initrand_fromfile(mc_params.RandGenStatusFilename,myseed_default);
+
+  // init ferm params and read rational approx coeffs
+  if(init_ferm_params(fermions_parameters)){
+    MPI_PRINTF0("Finalizing...\n"); //cp
+#ifdef MULTIDEVICE
+    MPI_Finalize();
+#endif
+    exit(1);
+  }
+	#pragma acc enter data copyin(fermions_parameters[0:alloc_info.NDiffFlavs])
+    
+
+  allocate_memory();
+  
+	gl_stout_rho=act_params.stout_rho;
+	gl_topo_rho=act_params.topo_rho;
+	#pragma acc enter data copyin(gl_stout_rho)
+	#pragma acc enter data copyin(gl_topo_rho)
+
+  compute_nnp_and_nnm_openacc();
+	#pragma acc enter data copyin(nnp_openacc)
+	#pragma acc enter data copyin(nnm_openacc)
+  MPI_PRINTF0("nn computation : OK\n");
+  init_all_u1_phases(backfield_parameters,fermions_parameters);
+	#pragma acc update device(u1_back_phases[0:8*alloc_info.NDiffFlavs])
+	#pragma acc update device(mag_obs_re[0:8*alloc_info.NDiffFlavs])
+	#pragma acc update device(mag_obs_im[0:8*alloc_info.NDiffFlavs])
+
+  if(inverter_tricks.useMixedPrecision || md_parameters.singlePrecMD){
+		#pragma acc update device(u1_back_phases_f[0:8*alloc_info.NDiffFlavs])
+  }
+  MPI_PRINTF0("u1_backfield initialization (float & double): OK \n");
+
+  initialize_md_global_variables(md_parameters);
+  MPI_PRINTF0("init md vars : OK \n");
+
+  read_or_generate_conf();
+
+#ifdef PAR_TEMP
+  assign_replica_defects();
+#endif 
+	
+  // check conf sanity
+  double avg_unitarity_deviation,max_unitarity_deviation;
+  check_unitarity_host(conf_acc,&max_unitarity_deviation, &avg_unitarity_deviation);
+  MPI_PRINTF1("Avg/Max unitarity deviation on device: %e / %e\n",avg_unitarity_deviation,max_unitarity_deviation);
+}
+
+
+
+
+void save_conf_and_status(){
+  // save gauge confs (with replicas if present)
 #ifdef PAR_TEMP
     snprintf(r_utils->rep_str,20,"replica_%d",devinfo.replica_idx); // initialize rep_str
     strcat(mc_params.save_conf_name,r_utils->rep_str); // append rep_str
@@ -1174,17 +1170,22 @@ void cleanup(){
 #ifdef PAR_TEMP
     strcpy(mc_params.save_conf_name,aux_name_file);
 #endif
-	} // end replicas 
-	
+
+  // save RNG status
 	if (debug_settings.SaveAllAtEnd){
 		MPI_PRINTF1("Saving rng status in %s.\n", mc_params.RandGenStatusFilename);
   saverand_tofile(mc_params.RandGenStatusFilename);
 	}
 
+
+  // save program status
   if(0 == devinfo.myrank_world && debug_settings.SaveAllAtEnd){
     save_global_program_status(mc_params, glob_max_update_times,glob_max_flavour_cycle_times); // WARNING: this function in some cases does not work
   }
 
+}
+
+void free_all_allocations(){
   MPI_PRINTF0("Double precision free [CORE]\n");
   mem_free_core();
     
@@ -1225,9 +1226,18 @@ void cleanup(){
       all=all->next;
     };
 
+}
+
+
+void cleanup(){
+  save_conf_and_status();
+
+  free_all_allocations();
+
 #ifndef __GNUC__
   // OpenAcc context closing
-  shutdown_acc_device(MY_DEVICE_TYPE);
+  acc_device_t my_device_type = MY_DEVICE_TYPE;
+  shutdown_acc_device(my_device_type);
 #endif
 
 #ifdef MULTIDEVICE
@@ -1236,8 +1246,6 @@ void cleanup(){
     
   if(0==devinfo.myrank_world){printf("The End\n");}
 }
-
-
 
 
 int main(int argc, char* argv[]){
