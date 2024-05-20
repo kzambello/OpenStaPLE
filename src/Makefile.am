@@ -90,6 +90,8 @@ __common_sources = \
 	Mpi/geometry_multidev.h \
 	Mpi/multidev.c \
 	Mpi/multidev.h \
+	Meas/measure_wrappers.c \
+	Meas/measure_wrappers.h \
 	OpenAcc/HPT_utilities.c \
   OpenAcc/HPT_utilities.h \
 	OpenAcc/action.c \

@@ -40,6 +40,7 @@
 #include "../Meas/gauge_meas.h"
 #include "../Meas/polyakov.h"
 #include "../Meas/measure_topo.h"
+#include "../Meas/measure_wrappers.h"
 #include "../Mpi/communications.h"
 #include "../Mpi/multidev.h"
 #include "../Rand/random.h"
@@ -96,14 +97,10 @@
 //TODO: maybe encapsulate these into some structure with global access
 // global variables 
 int conf_id_iter;
-int id_iter,id_iter_offset;
 int verbosity_lv;
 unsigned int myseed_default;
 
-
-
-
-void first_conf_measurement(){
+void first_conf_measurement(measure_wrapper *meas_wrap_ptr){
   if(0 == mc_params.ntraj && 0 == mc_params.JarzynskiMode ){ // measures only
       
     printf("\n#################################################\n");
@@ -111,22 +108,20 @@ void first_conf_measurement(){
     printf("\n#################################################\n");
 
     IF_PERIODIC_REPLICA(){
-      double plq,rect;
-      d_complex poly;
       // gauge stuff measures
       printf("Gauge Measures:\n");
-      plq = calc_plaquette_soloopenacc(conf_acc,aux_conf_acc,local_sums);
+      meas_wrap_ptr->plq = calc_plaquette_soloopenacc(conf_acc,aux_conf_acc,local_sums);
 
 #if !defined(GAUGE_ACT_WILSON) || !(NRANKS_D3 > 1)
-      rect = calc_rettangolo_soloopenacc(conf_acc,aux_conf_acc,local_sums);
+      meas_wrap_ptr->rect = calc_rettangolo_soloopenacc(conf_acc,aux_conf_acc,local_sums);
 #else
       MPI_PRINTF0("multidevice rectangle computation with Wilson action not implemented\n");
 #endif 
-      poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);//misura polyakov loop
+      meas_wrap_ptr->poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);//misura polyakov loop
         
-      printf("Plaquette     : %.18lf\n" ,plq/GL_SIZE/3.0/6.0);
-      printf("Rectangle     : %.18lf\n" ,rect/GL_SIZE/3.0/6.0/2.0);
-      printf("Polyakov Loop : (%.18lf,%.18lf) \n",creal(poly),cimag(poly));
+      printf("Plaquette     : %.18lf\n" ,meas_wrap_ptr->plq/GL_SIZE/3.0/6.0);
+      printf("Rectangle     : %.18lf\n" ,meas_wrap_ptr->rect/GL_SIZE/3.0/6.0/2.0);
+      printf("Polyakov Loop : (%.18lf,%.18lf) \n",creal(meas_wrap_ptr->poly),cimag(meas_wrap_ptr->poly));
 
       // fermionic stuff measures
       //
@@ -134,18 +129,20 @@ void first_conf_measurement(){
 																		fm_par.fermionic_outfilename);
       fermion_measures(conf_acc,fermions_parameters,
                        &fm_par, md_parameters.residue_metro, 
-                       md_parameters.max_cg_iterations, id_iter_offset,
-                       plq/GL_SIZE/3.0/6.0,
-                       rect/GL_SIZE/3.0/6.0/2.0);   
+                       md_parameters.max_cg_iterations, meas_wrap_ptr->id_iter_offset,
+                       meas_wrap_ptr->plq/GL_SIZE/3.0/6.0,
+                       meas_wrap_ptr->rect/GL_SIZE/3.0/6.0/2.0);   
     }
 
   }else MPI_PRINTF0("Starting generation of Configurations.\n");
 }
 
 
+int loc_max_update_times, glob_max_update_times;
+int loc_max_flavour_cycle_times, glob_max_flavour_cycle_times;
+int loc_max_run_times, glob_max_run_times;
 
-
-void check_and_update_run_condition(){
+void check_and_update_run_condition(measure_wrapper *meas_wrap_ptr){
   if(0 == devinfo.myrank_world && RUN_CONDITION_TERMINATE != mc_params.run_condition){ 
    
     // program exits if it finds a file called "stop"
@@ -199,7 +196,7 @@ void check_and_update_run_condition(){
       mc_params.run_condition = RUN_CONDITION_TERMINATE;
     }
     // program exits if MTraj is reached
-    if(id_iter >= (mc_params.ntraj+id_iter_offset)){
+    if(meas_wrap_ptr->id_iter >= (mc_params.ntraj+meas_wrap_ptr->id_iter_offset)){
       printf("%s - NTraj=%d reached, job done!",
              devinfo.myrankstr, mc_params.ntraj);
       printf("%s - shutting down now.\n", devinfo.myrankstr);
@@ -232,17 +229,17 @@ void check_and_update_run_condition(){
 
 
 
-void apply_Jarzinsky_mode(){
+void apply_Jarzinsky_mode(measure_wrapper *meas_wrap_ptr){
      bf_param new_backfield_parameters = backfield_parameters;
 
      // direct mode 
      if(1 == mc_params.JarzynskiMode)
          new_backfield_parameters.bz = backfield_parameters.bz + 
-             (double) id_iter/mc_params.MaxConfIdIter;
+             (double) meas_wrap_ptr->id_iter/mc_params.MaxConfIdIter;
      // reverse mode
      if(-1 == mc_params.JarzynskiMode)
          new_backfield_parameters.bz = backfield_parameters.bz -
-             (double) id_iter/mc_params.MaxConfIdIter;
+             (double) meas_wrap_ptr->id_iter/mc_params.MaxConfIdIter;
 
      if(0==devinfo.myrank_world){
 
@@ -265,7 +262,7 @@ void apply_Jarzinsky_mode(){
                           mc_params.MaxConfIdIter);
 
          printf("JarzynskiMode, iteration %d/%d (%d max for this run)\n",
-                      id_iter,mc_params.MaxConfIdIter,mc_params.ntraj);
+                      meas_wrap_ptr->id_iter,mc_params.MaxConfIdIter,mc_params.ntraj);
          printf("JarzynskiMode - current bz value : %f\n", new_backfield_parameters.bz);
      }
 
@@ -276,7 +273,7 @@ void apply_Jarzinsky_mode(){
 }
 
 
-void print_action_HMC(char *before_after[]){
+void print_action_HMC(char before_after[]){
     double action;
     action  = - C_ZERO * BETA_BY_THREE * calc_plaquette_soloopenacc(conf_acc, aux_conf_acc, local_sums);
 #ifdef GAUGE_ACT_TLSM
@@ -292,115 +289,46 @@ void print_action_HMC(char *before_after[]){
 #endif
 
 }
-
-
-
-
-
-void send_local_acceptances(){
 #ifdef PAR_TEMP
-    // send acceptance values from all ranks and receives on world master
-    //TODO: this introduces some overhead, possibly optimize
-    for(int ridx=0; ridx<rep->replicas_total_number; ++ridx){
-      for(int salarank=0; salarank<NRANKS_D3; ++salarank){
-        if(0==devinfo.myrank_world){
-          if(ridx==0  && salarank==0){
-            rankloc_accettate_therm=accettate_therm[lab];
-            rankloc_accettate_metro=accettate_metro[lab];
-          }else{
-            MPI_Send((int*)&accettate_therm[rep->label[ridx]],1,MPI_INT,ridx*NRANKS_D3+salarank,salarank,MPI_COMM_WORLD);
-            MPI_Send((int*)&accettate_metro[rep->label[ridx]],1,MPI_INT,ridx*NRANKS_D3+salarank,salarank+NRANKS_D3,MPI_COMM_WORLD);
-          }
-        }else{
-          if(ridx==devinfo.replica_idx && salarank==devinfo.myrank){
-            MPI_Recv((int*)&rankloc_accettate_therm,1,MPI_INT,0,salarank,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-            MPI_Recv((int*)&rankloc_accettate_metro,1,MPI_INT,0,salarank+NRANKS_D3,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-          }
-        }
-      }
-    }
-#endif
-}
-
-
-void sync_local_acceptances(int which_mode){
-#ifdef PAR_TEMP
-    for(int ridx=0; ridx<rep->replicas_total_number; ++ridx){
-      if(0==devinfo.myrank_world){
-        if(ridx==0){
-          accettate_therm[lab]=rankloc_accettate_therm;
-          accettate_metro[lab]=rankloc_accettate_metro;
-        }else{
-          MPI_Recv((int*)&accettate_therm[rep->label[ridx]],1,MPI_INT,ridx*NRANKS_D3,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-          MPI_Recv((int*)&accettate_metro[rep->label[ridx]],1,MPI_INT,ridx*NRANKS_D3,1,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-        }
-      }else{
-        if(ridx==devinfo.replica_idx && devinfo.myrank==0){
-          MPI_Send((int*)&rankloc_accettate_therm,1,MPI_INT,0,0,MPI_COMM_WORLD);
-          MPI_Send((int*)&rankloc_accettate_metro,1,MPI_INT,0,1,MPI_COMM_WORLD);
-        }
-      }
-    }
-#endif
-    
-        if(which_mode /* is metro */ && 0==devinfo.myrank_world){
-#ifdef PAR_TEMP
-            int iterations = id_iter-id_iter_offset-accettate_therm[0]+1;
-            double acceptance = (double) accettate_metro[0] / iterations;
-            double acc_err = sqrt((double)accettate_metro[0]*(iterations-accettate_metro[0])/iterations)/iterations;
-            printf("Estimated HMC acceptance for this run [replica %d]: %f +- %f\n. Iterations: %d\n",0,acceptance, acc_err, iterations);
-#else
-            int iterations = id_iter-id_iter_offset-rankloc_accettate_therm+1;
-            double acceptance = (double) rankloc_accettate_metro / iterations;
-            double acc_err = sqrt((double)rankloc_accettate_metro*(iterations-rankloc_accettate_metro)/iterations)/iterations;
-            printf("Estimated HMC acceptance for this run: %f +- %f\n. Iterations: %d\n",acceptance, acc_err, iterations);
-#endif
-        }
-}
-
-
-
-
 void perform_replica_step(){
     if(rep->replicas_total_number>1){
         // conf swap
         if (0==devinfo.myrank_world) {printf("CONF SWAP PROPOSED\n");}
         #pragma acc update host(conf_acc[0:alloc_info.conf_acc_size])
-        manage_replica_swaps(conf_acc, aux_conf_acc, local_sums, &r_utils->def, &swap_number,all_swap_vector,acceptance_vector,rep);
+        manage_replica_swaps(conf_acc, aux_conf_acc, local_sums, &(r_utils->def), &swap_number,r_utils->all_swap_vector,r_utils->acceptance_vector,rep);
 
         if (0==devinfo.myrank_world) {printf("Number of accepted swaps: %d\n", swap_number);}       
         #pragma acc update host(conf_acc[0:8])
 
         // periodic conf translation
-        lab=rep->label[devinfo.replica_idx];
-        if(lab==0){
+        if(0==rep->label[devinfo.replica_idx]){
           trasl_conf(conf_acc,auxbis_conf_acc);
         }
     }
     #pragma acc update host(conf_acc[0:8])
 }
+#endif
 
 
 
 
-void perform_all_measurements(){
+void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
+
   IF_PERIODIC_REPLICA()
   {
-    double plq,rect;
-    d_complex poly;
     printf("===========GAUGE MEASURING============\n");
       
-    plq  = calc_plaquette_soloopenacc(conf_acc,aux_conf_acc,local_sums);
+    meas_wrap_ptr->plq  = calc_plaquette_soloopenacc(conf_acc,aux_conf_acc,local_sums);
 #if !defined(GAUGE_ACT_WILSON) || !(NRANKS_D3 > 1)
-    rect = calc_rettangolo_soloopenacc(conf_acc,aux_conf_acc,local_sums);
+    meas_wrap_ptr->rect = calc_rettangolo_soloopenacc(conf_acc,aux_conf_acc,local_sums);
 #else
     MPI_PRINTF0("multidevice rectangle computation with Wilson action not implemented\n");
 #endif
-    poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);
+    meas_wrap_ptr->poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);
       
     if(meastopo_params.meascool && conf_id_iter%meastopo_params.cooleach==0){
       su3_soa *conf_to_use;
-      cool_topo_ch[0]=compute_topological_charge(conf_acc,auxbis_conf_acc,topo_loc);
+      meas_wrap_ptr->cool_topo_ch[0]=compute_topological_charge(conf_acc,auxbis_conf_acc,topo_loc);
       for(int cs = 1; cs <= meastopo_params.coolmeasstep; cs++){
         if(cs==1)
           conf_to_use=(su3_soa*)conf_acc;
@@ -408,7 +336,7 @@ void perform_all_measurements(){
           conf_to_use=(su3_soa*)aux_conf_acc;
         cool_conf(conf_to_use,aux_conf_acc,auxbis_conf_acc);
         if(cs%meastopo_params.cool_measinterval==0)
-          cool_topo_ch[cs/meastopo_params.cool_measinterval]=compute_topological_charge(aux_conf_acc,auxbis_conf_acc,topo_loc);
+          meas_wrap_ptr->cool_topo_ch[cs/meastopo_params.cool_measinterval]=compute_topological_charge(aux_conf_acc,auxbis_conf_acc,topo_loc);
       }
       MPI_PRINTF0("Printing cooled charge - only by master rank...\n");
       if(devinfo.myrank ==0){
@@ -423,7 +351,7 @@ void perform_all_measurements(){
           for(int i = 0; i <= meastopo_params.coolmeasstep/meastopo_params.cool_measinterval;i++)
             fprintf(cooloutfile,"%d\t%d\t%18.18lf\n",conf_id_iter,
                     i*meastopo_params.cool_measinterval,
-                    cool_topo_ch[i]);
+                    meas_wrap_ptr->cool_topo_ch[i]);
         }
         fclose(cooloutfile);
       }
@@ -431,10 +359,10 @@ void perform_all_measurements(){
 
     if(meastopo_params.measstout && conf_id_iter%meastopo_params.stouteach==0){
       stout_wrapper(conf_acc,gstout_conf_acc_arr,1);
-      stout_topo_ch[0]=compute_topological_charge(conf_acc,auxbis_conf_acc,topo_loc);
+      meas_wrap_ptr->stout_topo_ch[0]=compute_topological_charge(conf_acc,auxbis_conf_acc,topo_loc);
       for(int ss = 0; ss < meastopo_params.stoutmeasstep; ss+=meastopo_params.stout_measinterval){
         int topoindx =1+ss/meastopo_params.stout_measinterval; 
-        stout_topo_ch[topoindx]=compute_topological_charge(&gstout_conf_acc_arr[8*ss],auxbis_conf_acc,topo_loc);
+        meas_wrap_ptr->stout_topo_ch[topoindx]=compute_topological_charge(&gstout_conf_acc_arr[8*ss],auxbis_conf_acc,topo_loc);
       }
 
       MPI_PRINTF0("Printing stouted charge - only by master rank...\n");
@@ -450,7 +378,7 @@ void perform_all_measurements(){
           for(int i = 0; i <= meastopo_params.stoutmeasstep/meastopo_params.stout_measinterval;i++)
             fprintf(stoutoutfile,"%d\t%d\t%18.18lf\n",conf_id_iter,
                     i*meastopo_params.stout_measinterval,
-                    stout_topo_ch[i]);
+                    meas_wrap_ptr->stout_topo_ch[i]);
         }
         fclose(stoutoutfile);
       }
@@ -465,18 +393,18 @@ void perform_all_measurements(){
         fprintf(goutfile,"%s",gauge_outfile_header);
       }
       if(goutfile){
-        if(id_iter<mc_params.therm_ntraj){
+        if(meas_wrap_ptr->id_iter<mc_params.therm_ntraj){
           printf("Therm_iter %d",conf_id_iter );
-          printf("Plaquette = %.18lf    ", plq/GL_SIZE/6.0/3.0);
-          printf("Rectangle = %.18lf\n",rect/GL_SIZE/6.0/3.0/2.0);
-        }else printf("Metro_iter %d   Plaquette= %.18lf    Rectangle = %.18lf\n",conf_id_iter,plq/GL_SIZE/6.0/3.0,rect/GL_SIZE/6.0/3.0/2.0);
+          printf("Plaquette = %.18lf    ", meas_wrap_ptr->plq/GL_SIZE/6.0/3.0);
+          printf("Rectangle = %.18lf\n",meas_wrap_ptr->rect/GL_SIZE/6.0/3.0/2.0);
+        }else printf("Metro_iter %d   Plaquette= %.18lf    Rectangle = %.18lf\n",conf_id_iter,meas_wrap_ptr->plq/GL_SIZE/6.0/3.0,meas_wrap_ptr->rect/GL_SIZE/6.0/3.0/2.0);
 
-        fprintf(goutfile,"%d\t%d\t",conf_id_iter,acceptance_to_print);
+        fprintf(goutfile,"%d\t%d\t",conf_id_iter,meas_wrap_ptr->acceptance_to_print);
               
         fprintf(goutfile,"%.18lf\t%.18lf\t%.18lf\t%.18lf\n",
-                plq/GL_SIZE/6.0/3.0,
-                rect/GL_SIZE/6.0/3.0/2.0, 
-                creal(poly), cimag(poly));
+                meas_wrap_ptr->plq/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->rect/GL_SIZE/6.0/3.0/2.0, 
+                creal(meas_wrap_ptr->poly), cimag(meas_wrap_ptr->poly));
       }
       fclose(goutfile);
     }
@@ -487,10 +415,6 @@ void perform_all_measurements(){
 
 
 
-
-int loc_max_update_times, glob_max_update_times;
-int loc_max_flavour_cycle_times, glob_max_flavour_cycle_times;
-int loc_max_run_times, glob_max_run_times;
 
 void update_times(){
         loc_max_update_times=mc_params.max_update_time;
@@ -513,37 +437,11 @@ void update_times(){
 
 
 void main_loop(){
-  // measurement buffers
-  double cool_topo_ch[meastopo_params.coolmeasstep/meastopo_params.cool_measinterval+1];
-  double stout_topo_ch[meastopo_params.stoutmeasstep/meastopo_params.stout_measinterval+1];
+  measure_wrapper meas_wrap;
+  init_meas_wrapper(&meas_wrap,&meastopo_params, conf_id_iter);
 
-  // acceptance buffers //TODO: encapsulate into structure
-  int rankloc_accettate_therm=0;
-  int rankloc_accettate_metro=0;
-  int rankloc_accettate_therm_old;
-  int rankloc_accettate_metro_old;
-  id_iter_offset=conf_id_iter;
-
+  //TODO: put into r_utils
 #ifdef PAR_TEMP
-  int *accettate_therm;
-  int *accettate_metro;
-  int *accettate_therm_old;
-  int *accettate_metro_old;
-
-  if(0==devinfo.myrank_world){
-    accettate_therm=malloc(sizeof(int)*rep->replicas_total_number);
-    accettate_metro=malloc(sizeof(int)*rep->replicas_total_number);
-    accettate_therm_old=malloc(sizeof(int)*rep->replicas_total_number);
-    accettate_metro_old=malloc(sizeof(int)*rep->replicas_total_number);
-    
-    // inizialization to 0
-    for(int lab=0;lab<rep->replicas_total_number;lab++){
-      accettate_therm[lab]=0;
-      accettate_metro[lab]=0;
-      accettate_therm_old[lab]=0;
-      accettate_metro_old[lab]=0;
-    }
-  }
 	int swap_number=0;
 #endif
 
@@ -551,34 +449,31 @@ void main_loop(){
   printf("PLAQUETTE START\n");
     
   IF_PERIODIC_REPLICA(){
-    double plq;
-    plq = calc_plaquette_soloopenacc(conf_acc,aux_conf_acc,local_sums);
-    MPI_PRINTF1("Therm_iter %d Placchetta    = %.18lf \n", conf_id_iter,plq/GL_SIZE/6.0/3.0);
+    meas_wrap.plq = calc_plaquette_soloopenacc(conf_acc,aux_conf_acc,local_sums);
+    MPI_PRINTF1("Therm_iter %d Placchetta    = %.18lf \n", conf_id_iter,meas_wrap.plq/GL_SIZE/6.0/3.0);
   }
     
   printf("PLAQUETTE END\n");
 
 #if !defined(GAUGE_ACT_WILSON) || !(NRANKS_D3 > 1)
   IF_PERIODIC_REPLICA(){
-    double rect;
-    rect = calc_rettangolo_soloopenacc(conf_acc,aux_conf_acc,local_sums);
-    MPI_PRINTF1("Therm_iter %d Rettangolo = %.18lf \n", conf_id_iter,rect/GL_SIZE/6.0/3.0/2.0);
+    meas_wrap.rect = calc_rettangolo_soloopenacc(conf_acc,aux_conf_acc,local_sums);
+    MPI_PRINTF1("Therm_iter %d Rettangolo = %.18lf \n", conf_id_iter,meas_wrap.rect/GL_SIZE/6.0/3.0/2.0);
   }
 #else
   MPI_PRINTF0("multidevice rectangle computation with Wilson action not implemented\n");
 #endif
 
   IF_PERIODIC_REPLICA(){
-    d_complex poly;
-    poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);
-    MPI_PRINTF1("Therm_iter %d Polyakov Loop = (%.18lf, %.18lf)  \n", conf_id_iter,creal(poly),cimag(poly));
+    meas_wrap.poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);
+    MPI_PRINTF1("Therm_iter %d Polyakov Loop = (%.18lf, %.18lf)  \n", conf_id_iter,creal(meas_wrap.poly),cimag(meas_wrap.poly));
   }
 	
-  first_conf_measurement();
+  first_conf_measurement(&meas_wrap);
      
   // thermalization & metropolis updates
 
-  id_iter=id_iter_offset;
+  meas_wrap.id_iter=meas_wrap.id_iter_offset;
     
   init_global_program_status(); 
   loc_max_update_times=0;
@@ -592,26 +487,18 @@ void main_loop(){
         struct timeval tstart_cycle,tend_cycle;
         gettimeofday(&tstart_cycle, NULL);
 
-        if(0 != mc_params.JarzynskiMode ) apply_Jarzinsky_mode();
+        if(0 != mc_params.JarzynskiMode ) apply_Jarzinsky_mode(&meas_wrap);
 
         double avg_unitarity_deviation,max_unitarity_deviation;
         check_unitarity_device(conf_acc,&max_unitarity_deviation, &avg_unitarity_deviation);
         MPI_PRINTF1("Avg/Max unitarity deviation on device: %e / %e\n",avg_unitarity_deviation,max_unitarity_deviation);
-    
-        if(0==devinfo.myrank_world){
-#ifdef PAR_TEMP
-          for (int lab=0;lab<rep->replicas_total_number;lab++){
-            accettate_therm_old[lab]= accettate_therm[lab];
-            accettate_metro_old[lab]= accettate_metro[lab];
-          }
-#else
-          rankloc_accettate_therm_old= rankloc_accettate_therm;
-          rankloc_accettate_metro_old= rankloc_accettate_metro;
-#endif
 
+        update_acceptances(&meas_wrap);  
+
+        if(0==devinfo.myrank_world){
           printf("\n#################################################\n"); 
           printf(  "   GENERATING CONF %d of %d, %dx%dx%dx%d,%1.3f \n", 
-          conf_id_iter,mc_params.ntraj+id_iter_offset,
+          conf_id_iter,mc_params.ntraj+meas_wrap.id_iter_offset,
                                  geom_par.gnx,geom_par.gny,
                                  geom_par.gnz,geom_par.gnt,
                                  act_params.beta);
@@ -620,7 +507,7 @@ void main_loop(){
 
 #ifdef PAR_TEMP
           for(int i=0;i<rep->replicas_total_number-1;i++){
-            acceptance_vector_old[i]=acceptance_vector[i];
+            r_utils->acceptance_vector_old[i]=r_utils->acceptance_vector[i];
           }
 #endif
           {
@@ -630,19 +517,19 @@ void main_loop(){
                 }
 
                 // HMC step
-                int which_mode=(id_iter<mc_params.therm_ntraj)? 0 : 1; // 0: therm, 1: metro
-                int *rankloc_accettate_which[2]={&rankloc_accettate_therm,(int*)&rankloc_accettate_metro};
-                int effective_iter = id_iter-id_iter_offset-(which_mode==1? rankloc_accettate_therm : 0);
+                int which_mode=(meas_wrap.id_iter<mc_params.therm_ntraj)? 0 : 1; // 0: therm, 1: metro
+                int *rankloc_accettate_which[2]={&(meas_wrap.rankloc_accettate_therm),(int*)&(meas_wrap.rankloc_accettate_metro)};
+                int effective_iter = meas_wrap.id_iter-meas_wrap.id_iter_offset-(which_mode==1? meas_wrap.rankloc_accettate_therm : 0);
 
 
-                send_local_acceptances();
+                send_local_acceptances(&meas_wrap);
     
                 *rankloc_accettate_which[which_mode] = UPDATE_SOLOACC_UNOSTEP_VERSATILE(conf_acc,
                                                           md_parameters.residue_metro,md_parameters.residue_md, effective_iter,
-                                                          *rankloc_accettate_which[which_mode],which_mode,md_parameters.max_cg_iterations);
+                                                          *(rankloc_accettate_which[which_mode]),which_mode,md_parameters.max_cg_iterations);
 
                 // sync acceptance array on world master
-                sync_local_acceptances(which_mode);
+                sync_local_acceptances(&meas_wrap,which_mode);
                 #pragma acc update host(conf_acc[0:8])
 
                 // final action
@@ -655,7 +542,7 @@ void main_loop(){
 #endif
           }
 
-          id_iter++;
+          meas_wrap.id_iter++;
           conf_id_iter++;
     
 #ifdef PAR_TEMP
@@ -679,15 +566,15 @@ void main_loop(){
 // print   acceptances
               for(int lab=0;lab<rep->replicas_total_number;lab++){
                   if(lab<rep->replicas_total_number-1){
-                      mean_acceptance=(double)acceptance_vector[lab]/all_swap_vector[lab];
-                      printf("replica couple [labels: %d/%d]: proposed %d, accepted %d, mean_acceptance %f\n",lab,lab+1,all_swap_vector[lab],acceptance_vector[lab],mean_acceptance);
+                      mean_acceptance=(double)r_utils->acceptance_vector[lab]/r_utils->all_swap_vector[lab];
+                      printf("replica couple [labels: %d/%d]: proposed %d, accepted %d, mean_acceptance %f\n",lab,lab+1,r_utils->all_swap_vector[lab],r_utils->acceptance_vector[lab],mean_acceptance);
                       if(rep->replicas_total_number>1){
-                          fprintf(swap_acc_file,"%d\t",acceptance_vector[lab]-acceptance_vector_old[lab]);
+                          fprintf(swap_acc_file,"%d\t",r_utils->acceptance_vector[lab]-r_utils->acceptance_vector_old[lab]);
                       }
                   }
 
                   if(rep->replicas_total_number>1){
-                      fprintf(hmc_acc_file,"%d\t", accettate_therm[lab]+accettate_metro[lab] -accettate_therm_old[lab]-accettate_metro_old[lab]);
+                      fprintf(hmc_acc_file,"%d\t", meas_wrap.accettate_therm[lab]+meas_wrap.accettate_metro[lab] -meas_wrap.accettate_therm_old[lab]-meas_wrap.accettate_metro_old[lab]);
                   }
       
               }
@@ -705,29 +592,27 @@ void main_loop(){
           }
 #endif
   
-  // gauge stuff measures
-  int acceptance_to_print;
+    // gauge stuff measures
 #ifdef PAR_TEMP
-  if(0==devinfo.myrank_world){
-    acceptance_to_print=accettate_therm[0]+accettate_metro[0]-accettate_therm_old[0]-accettate_metro_old[0];
-    int ridx_lab0 = get_index_of_pbc_replica(); // finds index corresponding to label=0
-    if(ridx_lab0!=0){
-      MPI_Send((int*)&acceptance_to_print,1,MPI_INT,ridx_lab0*NRANKS_D3,0,MPI_COMM_WORLD);
+    if(0==devinfo.myrank_world){
+      meas_wrap.acceptance_to_print=meas_wrap.accettate_therm[0]+meas_wrap.accettate_metro[0]-meas_wrap.accettate_therm_old[0]-meas_wrap.accettate_metro_old[0];
+      int ridx_lab0 = get_index_of_pbc_replica(); // finds index corresponding to label=0
+      if(ridx_lab0!=0){
+        MPI_Send((int*)&meas_wrap.acceptance_to_print,1,MPI_INT,ridx_lab0*NRANKS_D3,0,MPI_COMM_WORLD);
+      }
+    }else{
+      if(0==rep->label[devinfo.replica_idx] && devinfo.myrank==0){
+        MPI_Recv((int*)&meas_wrap.acceptance_to_print,1,MPI_INT,0,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+      }
     }
-  }else{
-    if(0==rep->label[devinfo.replica_idx] && devinfo.myrank==0){
-      MPI_Recv((int*)&acceptance_to_print,1,MPI_INT,0,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-    }
-  }
 #else
-  acceptance_to_print=rankloc_accettate_therm+rankloc_accettate_metro-rankloc_accettate_therm_old-rankloc_accettate_metro_old;
+    meas_wrap.acceptance_to_print=meas_wrap.rankloc_accettate_therm+meas_wrap.rankloc_accettate_metro-meas_wrap.rankloc_accettate_therm_old-meas_wrap.rankloc_accettate_metro_old;
 #endif
 
 
-  perform_all_measurements();
+    perform_all_measurements(&meas_wrap);
  
-            // saving conf_store
-
+    // saving conf_store
     // saves gauge conf and rng status to file
     if(conf_id_iter%mc_params.storeconfinterval==0){ 
       char tempname[50];
@@ -745,155 +630,157 @@ void main_loop(){
       saverand_tofile(tempname);
     }
 
-                if(conf_id_iter%mc_params.saveconfinterval==0){
-    {
+    if(conf_id_iter%mc_params.saveconfinterval==0){
+      {
 #ifdef PAR_TEMP        
-                    snprintf(r_utils->rep_str,20,"replica_%d",devinfo.replica_idx);
-                    strcat(mc_params.save_conf_name,r_utils->rep_str);
+          snprintf(r_utils->rep_str,20,"replica_%d",devinfo.replica_idx);
+          strcat(mc_params.save_conf_name,r_utils->rep_str);
 #endif
-                    if (debug_settings.SaveAllAtEnd){
-                        MPI_PRINTF1("Saving conf %s.\n", mc_params.save_conf_name);
-                        save_conf_wrapper(conf_acc,mc_params.save_conf_name, conf_id_iter,
-                                                            debug_settings.use_ildg);
-                    }else
-                        MPI_PRINTF0("WARNING, \'SaveAllAtEnd\'=0,NOT SAVING/OVERWRITING CONF AND RNG STATUS.\n\n\n");
+          if (debug_settings.SaveAllAtEnd){
+              MPI_PRINTF1("Saving conf %s.\n", mc_params.save_conf_name);
+              save_conf_wrapper(conf_acc,mc_params.save_conf_name, conf_id_iter,
+                                                  debug_settings.use_ildg);
+          }else
+              MPI_PRINTF0("WARNING, \'SaveAllAtEnd\'=0,NOT SAVING/OVERWRITING CONF AND RNG STATUS.\n\n\n");
 #ifdef PAR_TEMP        
-                    strcpy(mc_params.save_conf_name,aux_name_file);
+          strcpy(mc_params.save_conf_name,aux_name_file);
 #endif
-                }
-                if (debug_settings.SaveAllAtEnd){
-                    MPI_PRINTF1("Saving rng status in %s.\n", mc_params.RandGenStatusFilename);
-                    saverand_tofile(mc_params.RandGenStatusFilename);
-                }
-            }
+      }
+      if (debug_settings.SaveAllAtEnd){
+          MPI_PRINTF1("Saving rng status in %s.\n", mc_params.RandGenStatusFilename);
+          saverand_tofile(mc_params.RandGenStatusFilename);
+      }
+    }
 
-            gettimeofday(&tend_cycle, NULL);
+    gettimeofday(&tend_cycle, NULL);
 
-            double update_time = (double) 
-                (tend_cycle.tv_sec - tstart_cycle.tv_sec)+
-                (double)(tend_cycle.tv_usec - tstart_cycle.tv_usec)/1.0e6;
-    
-            mc_params.max_update_time = (update_time > mc_params.max_update_time)?
-                update_time :mc_params.max_update_time;
+    double update_time = (double) 
+        (tend_cycle.tv_sec - tstart_cycle.tv_sec)+
+        (double)(tend_cycle.tv_usec - tstart_cycle.tv_usec)/1.0e6;
+
+    mc_params.max_update_time = (update_time > mc_params.max_update_time)?
+        update_time :mc_params.max_update_time;
+
+
+    if(0==devinfo.myrank_world){
+        printf("Tot time : %f sec (with measurements)\n", update_time);
+        if(debug_settings.save_diagnostics == 1){
+            FILE *foutfile = fopen(debug_settings.diagnostics_filename,"at");
+            fprintf(foutfile,"TOTTIME  %f \n",update_time);
+            fclose(foutfile);
+        }
+
+    }
+
+  }
+
+
+    if (GPSTATUS_FERMION_MEASURES == mc_params.next_gps){
+        // fermionic stuff measures
+
+        if(0 != mc_params.JarzynskiMode ){ // halfway measurements for Jarzynski
+
+            bf_param new_backfield_parameters = backfield_parameters;
+
+            // direct mode 
+            if(1 == mc_params.JarzynskiMode)
+                new_backfield_parameters.bz = backfield_parameters.bz + 
+                    (double) (meas_wrap.id_iter+0.5)/mc_params.MaxConfIdIter;
+            // reverse mode
+            if(-1 == mc_params.JarzynskiMode)
+                new_backfield_parameters.bz = backfield_parameters.bz -
+                    (double) (meas_wrap.id_iter+0.5)/mc_params.MaxConfIdIter;
 
 
             if(0==devinfo.myrank_world){
-                printf("Tot time : %f sec (with measurements)\n", update_time);
-                if(debug_settings.save_diagnostics == 1){
-                    FILE *foutfile = fopen(debug_settings.diagnostics_filename,"at");
-                    fprintf(foutfile,"TOTTIME  %f \n",update_time);
-                    fclose(foutfile);
-                }
 
+                printf("JarzynskiMode, iteration %d/%d (%d max for this run) - MEASUREMENTS AT HALFWAY \n",
+                             meas_wrap.id_iter,mc_params.MaxConfIdIter,mc_params.ntraj);
+                printf("JarzynskiMode - current bz value : %f (HALFWAY)\n", new_backfield_parameters.bz);
             }
+
+            init_all_u1_phases(new_backfield_parameters,fermions_parameters);
+            #pragma acc update device(u1_back_phases[0:8*alloc_info.NDiffFlavs])
+            #pragma acc update device(u1_back_phases_f[0:8*alloc_info.NDiffFlavs])
 
         }
 
+        double avg_unitarity_deviation, max_unitarity_deviation;
+        check_unitarity_device(conf_acc,&max_unitarity_deviation, &avg_unitarity_deviation);
+        MPI_PRINTF1("Avg/Max unitarity deviation on device: %e / %e\n",avg_unitarity_deviation,max_unitarity_deviation);
 
-        if (GPSTATUS_FERMION_MEASURES == mc_params.next_gps){
-            // fermionic stuff measures
-    
-            if(0 != mc_params.JarzynskiMode ){ // halfway measurements for Jarzynski
+        IF_PERIODIC_REPLICA(){
+            struct timeval tf0, tf1;
+            gettimeofday(&tf0, NULL);
+            fermion_measures(conf_acc,fermions_parameters,
+                                             &fm_par, md_parameters.residue_metro,
+                                             md_parameters.max_cg_iterations,conf_id_iter,
+                                             meas_wrap.plq/GL_SIZE/3.0/6.0,
+                                             meas_wrap.rect/GL_SIZE/3.0/6.0/2.0);   
 
-                bf_param new_backfield_parameters = backfield_parameters;
+            gettimeofday(&tf1, NULL);
 
-                // direct mode 
-                if(1 == mc_params.JarzynskiMode)
-                    new_backfield_parameters.bz = backfield_parameters.bz + 
-                        (double) (id_iter+0.5)/mc_params.MaxConfIdIter;
-                // reverse mode
-                if(-1 == mc_params.JarzynskiMode)
-                    new_backfield_parameters.bz = backfield_parameters.bz -
-                        (double) (id_iter+0.5)/mc_params.MaxConfIdIter;
+            double fermionMeasureTiming =
+                (double) (tf1.tv_sec - tf0.tv_sec)+
+                (double)(tf1.tv_usec - tf0.tv_usec)/1.0e6;
 
+            if(debug_settings.save_diagnostics == 1){
+                FILE *foutfile = 
+                    fopen(debug_settings.diagnostics_filename,"at");
 
-                if(0==devinfo.myrank_world){
-
-                    printf("JarzynskiMode, iteration %d/%d (%d max for this run) - MEASUREMENTS AT HALFWAY \n",
-                                 id_iter,mc_params.MaxConfIdIter,mc_params.ntraj);
-                    printf("JarzynskiMode - current bz value : %f (HALFWAY)\n", new_backfield_parameters.bz);
-                }
-
-                init_all_u1_phases(new_backfield_parameters,fermions_parameters);
-                #pragma acc update device(u1_back_phases[0:8*alloc_info.NDiffFlavs])
-                #pragma acc update device(u1_back_phases_f[0:8*alloc_info.NDiffFlavs])
-
+                if(conf_id_iter % fm_par.measEvery == 0 )
+                    fprintf(foutfile,"FERMMEASTIME  %f \n",fermionMeasureTiming);
+                fclose(foutfile);
             }
-
-            double avg_unitarity_deviation, max_unitarity_deviation;
-            check_unitarity_device(conf_acc,&max_unitarity_deviation, &avg_unitarity_deviation);
-            MPI_PRINTF1("Avg/Max unitarity deviation on device: %e / %e\n",avg_unitarity_deviation,max_unitarity_deviation);
-
-            IF_PERIODIC_REPLICA(){
-                struct timeval tf0, tf1;
-                gettimeofday(&tf0, NULL);
-                fermion_measures(conf_acc,fermions_parameters,
-                                                 &fm_par, md_parameters.residue_metro,
-                                                 md_parameters.max_cg_iterations,conf_id_iter,
-                                                 plq/GL_SIZE/3.0/6.0,
-                                                 rect/GL_SIZE/3.0/6.0/2.0);   
-
-                gettimeofday(&tf1, NULL);
-
-                double fermionMeasureTiming =
-                    (double) (tf1.tv_sec - tf0.tv_sec)+
-                    (double)(tf1.tv_usec - tf0.tv_usec)/1.0e6;
-
-                if(debug_settings.save_diagnostics == 1){
-                    FILE *foutfile = 
-                        fopen(debug_settings.diagnostics_filename,"at");
-
-                    if(conf_id_iter % fm_par.measEvery == 0 )
-                        fprintf(foutfile,"FERMMEASTIME  %f \n",fermionMeasureTiming);
-                    fclose(foutfile);
-                }
-                
-            } // closes if(0==rep->label[devinfo.replica_idx]) or just the scope if PAR_TEMP is not defined
+            
+        } // closes if(0==rep->label[devinfo.replica_idx]) or just the scope if PAR_TEMP is not defined
 
 #ifdef PAR_TEMP
-            {
-                int ridx_lab0 = get_index_of_pbc_replica(); // finds index corresponding to label=0
-                MPI_Bcast((void*)&(mc_params.measures_done),1,MPI_INT,ridx_lab0,MPI_COMM_WORLD);
-            }
+        {
+            int ridx_lab0 = get_index_of_pbc_replica(); // finds index corresponding to label=0
+            MPI_Bcast((void*)&(mc_params.measures_done),1,MPI_INT,ridx_lab0,MPI_COMM_WORLD);
+        }
 #endif
 
-            // save RNG status
-            if(conf_id_iter%mc_params.storeconfinterval==0){
-                char tempname[50];
-                char serial[10];
-                strcpy(tempname,mc_params.RandGenStatusFilename);
-                sprintf(serial,".%05d",conf_id_iter);
-                strcat(tempname,serial);
-                MPI_PRINTF1("Storing rng status in %s.\n" , tempname);
-                saverand_tofile(tempname);
-            } 
+        // save RNG status
+        if(conf_id_iter%mc_params.storeconfinterval==0){
+            char tempname[50];
+            char serial[10];
+            strcpy(tempname,mc_params.RandGenStatusFilename);
+            sprintf(serial,".%05d",conf_id_iter);
+            strcat(tempname,serial);
+            MPI_PRINTF1("Storing rng status in %s.\n" , tempname);
+            saverand_tofile(tempname);
+        } 
 
-            if(conf_id_iter%mc_params.saveconfinterval==0){
-                if( debug_settings.SaveAllAtEnd){
-                    MPI_PRINTF1("Saving rng status in %s.\n", mc_params.RandGenStatusFilename);
-                    saverand_tofile(mc_params.RandGenStatusFilename);
-                }
-                else MPI_PRINTF0("WARNING, \'SaveAllAtEnd\'=0,NOT SAVING/OVERWRITING RNG STATUS.\n\n\n");
+        if(conf_id_iter%mc_params.saveconfinterval==0){
+            if( debug_settings.SaveAllAtEnd){
+                MPI_PRINTF1("Saving rng status in %s.\n", mc_params.RandGenStatusFilename);
+                saverand_tofile(mc_params.RandGenStatusFilename);
             }
-
-        } // closes if (GPSTATUS_FERMION_MEASURES == mc_params.next_gps)
-				
-        // determining next thing to do
-        if(0 == conf_id_iter % fm_par.measEvery && 0 != alloc_info.NDiffFlavs)
-					mc_params.next_gps = GPSTATUS_FERMION_MEASURES;
-        if(mc_params.measures_done == fm_par.SingleInvNVectors){
-					mc_params.next_gps = GPSTATUS_UPDATE;
-					mc_params.measures_done = 0;
+            else MPI_PRINTF0("WARNING, \'SaveAllAtEnd\'=0,NOT SAVING/OVERWRITING RNG STATUS.\n\n\n");
         }
+
+    } // closes if (GPSTATUS_FERMION_MEASURES == mc_params.next_gps)
+    
+    // determining next thing to do
+    if(0 == conf_id_iter % fm_par.measEvery && 0 != alloc_info.NDiffFlavs)
+      mc_params.next_gps = GPSTATUS_FERMION_MEASURES;
+    if(mc_params.measures_done == fm_par.SingleInvNVectors){
+      mc_params.next_gps = GPSTATUS_UPDATE;
+      mc_params.measures_done = 0;
+    }
 
         
         update_times();
 
         // check update run condition and print times
-        check_and_update_run_condition();
+        check_and_update_run_condition(&meas_wrap);
 
       } // while id_iter loop ends here             
   } // closes if (0 != mc_params.ntraj)
+
+  free_meas_wrapper(&meas_wrap);
 }
 
 
@@ -1244,12 +1131,7 @@ void free_all_allocations(){
   }
 
 #ifdef PAR_TEMP
-  free(all_swap_vector);
-  free(acceptance_vector);
-
-  // freeing rep_info vectors
-  free(rep->cr_vec);
-  free(rep->label);
+  free_replica_utils();
 #endif
 	
   MPI_PRINTF0("freeing device nnp and nnm\n");
@@ -1267,7 +1149,6 @@ void free_all_allocations(){
       // free_wrapper(all->ptr);
       all=all->next;
     };
-
 }
 
 

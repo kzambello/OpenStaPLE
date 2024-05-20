@@ -5,5 +5,4 @@
 
 typedef double complex d_complex;
 
-
 #endif
