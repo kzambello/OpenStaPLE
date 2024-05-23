@@ -27,6 +27,7 @@
 
 #include <time.h>
 
+//TODO: make local
 void init_k(su3_soa * conf, double c_r, int def_axis, int * def_vec, defect_info * def, int defect_info_config){
   
   int mu, i, parity, condition, condition_2=1, condition_3=1;
@@ -325,16 +326,6 @@ void printing_k_mu(su3_soa * conf){
   }
 }
 
-// print conf labels
-void label_print(rep_info * hpt_params, FILE *file, int step_number){
-
-  int i;
-  fprintf(file,"%d    ",step_number);    
-  for(i=0;i<hpt_params->replicas_total_number;i++){
-    fprintf(file,"%d    ", hpt_params->label[i]);
-  }
-  fprintf(file,"\n");
-}
 
 double calc_S_soloopenacc_defect(__restrict  su3_soa * const tconf_acc,
 																 __restrict su3_soa * const local_plaqs,
@@ -762,10 +753,10 @@ void manage_replica_swaps(
           if (verbosity_lv>1) MPI_PRINTF1("pairs: %d %d (is swap proposed? %d)\n",lab,twin_lab,1-stay_still);
           if(!stay_still){
             if (verbosity_lv>1) MPI_PRINTF1("replica lab: %d gets coefficient %lf\n",lab,hpt_params->cr_vec[twin_lab]);
-            init_k(tconf_acc,hpt_params->cr_vec[twin_lab],hpt_params->defect_boundary,hpt_params->defect_coordinates,&r_utils->def,1);
+            init_k(tconf_acc,hpt_params->cr_vec[twin_lab],hpt_params->defect_boundary,hpt_params->defect_coordinates,def,1);
 #if NRANKS_D3 > 1
             //TODO: possibly optimize by updating only defect info
-            if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[twin_lab],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
+            if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[twin_lab],rep->defect_boundary,rep->defect_coordinates,def,1);
 #endif
             #pragma acc update device(tconf_acc[0:alloc_info.conf_acc_size])
           }
@@ -851,9 +842,9 @@ void manage_replica_swaps(
 
           // lab is the old lab
           if(!stay_still && !(swap_labs_accepted[lab])){
-            init_k(tconf_acc,hpt_params->cr_vec[lab],hpt_params->defect_boundary,hpt_params->defect_coordinates,&r_utils->def,1);
+            init_k(tconf_acc,hpt_params->cr_vec[lab],hpt_params->defect_boundary,hpt_params->defect_coordinates,def,1);
 #if NRANKS_D3 > 1
-            if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[lab],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
+            if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[lab],rep->defect_boundary,rep->defect_coordinates,def,1);
 #endif
             //TODO: possibly optimize by updating only defect info
             #pragma acc update device(tconf_acc[0:alloc_info.conf_acc_size])
@@ -909,18 +900,18 @@ void manage_replica_swaps(
 
           if (verbosity_lv>1) MPI_PRINTF1("replica lab: %d gets coefficient %lf\n",
                                           rep_lab1,hpt_params->cr_vec[rep_lab2]);
-          init_k(tconf_acc,hpt_params->cr_vec[rep_lab2],hpt_params->defect_boundary,hpt_params->defect_coordinates,&r_utils->def,1);
+          init_k(tconf_acc,hpt_params->cr_vec[rep_lab2],hpt_params->defect_boundary,hpt_params->defect_coordinates,def,1);
 #if NRANKS_D3 > 1
-          if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep_lab2],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
+          if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep_lab2],rep->defect_boundary,rep->defect_coordinates,def,1);
 #endif
         }
         if(rep_lab2==hpt_params->label[devinfo.replica_idx]){
           // set defect as prev
           if (verbosity_lv>1) MPI_PRINTF1("replica lab: %d gets coefficient %lf\n",
                                           rep_lab2,hpt_params->cr_vec[rep_lab1]);
-          init_k(tconf_acc,hpt_params->cr_vec[rep_lab1],hpt_params->defect_boundary,hpt_params->defect_coordinates,&r_utils->def,1);
+          init_k(tconf_acc,hpt_params->cr_vec[rep_lab1],hpt_params->defect_boundary,hpt_params->defect_coordinates,def,1);
 #if NRANKS_D3 > 1
-          if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep_lab1],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
+          if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep_lab1],rep->defect_boundary,rep->defect_coordinates,def,1);
 #endif
         }
         //TODO: possibly optimize by updating only defect info
@@ -975,16 +966,16 @@ void manage_replica_swaps(
         // back to their previous state (prev with prev and next with next)
         if(!accepted && rep_lab1==hpt_params->label[devinfo.replica_idx]){
           // set defect as next
-          init_k(tconf_acc,hpt_params->cr_vec[rep_lab1],hpt_params->defect_boundary,hpt_params->defect_coordinates,&r_utils->def,1);
+          init_k(tconf_acc,hpt_params->cr_vec[rep_lab1],hpt_params->defect_boundary,hpt_params->defect_coordinates,def,1);
 #if NRANKS_D3 > 1
-          if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep_lab1],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
+          if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep_lab1],rep->defect_boundary,rep->defect_coordinates,def,1);
 #endif
         }
         if(!accepted && rep_lab2==hpt_params->label[devinfo.replica_idx]){
           // set defect as prev
-          init_k(tconf_acc,hpt_params->cr_vec[rep_lab2],hpt_params->defect_boundary,hpt_params->defect_coordinates,&r_utils->def,1);
+          init_k(tconf_acc,hpt_params->cr_vec[rep_lab2],hpt_params->defect_boundary,hpt_params->defect_coordinates,def,1);
 #if NRANKS_D3 > 1
-          if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep_lab2],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
+          if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep_lab2],rep->defect_boundary,rep->defect_coordinates,def,1);
 #endif
         }
         //TODO: possibly optimize by updating only defect info
@@ -1036,40 +1027,6 @@ void trasl_conf( __restrict const su3_soa *  const tconf_acc,
 	#pragma acc update self(tconf_acc[0:8])
 #endif
 }
-
-
-void assign_replica_defects(){
-  int vec_aux_bound[3]={1,1,1};
-
-	if (0==devinfo.myrank_world) printf("Auxiliary confs defect initialization\n");
-  init_k(aux_conf_acc,1,0,vec_aux_bound,&r_utils->def,1);
-  init_k(auxbis_conf_acc,1,0,vec_aux_bound,&r_utils->def,1);
-	#pragma acc update device(aux_conf_acc[0:8])
-	#pragma acc update device(auxbis_conf_acc[0:8])
-
-	if(md_parameters.singlePrecMD){
-		convert_double_to_float_su3_soa(aux_conf_acc,aux_conf_acc_f);
-		convert_double_to_float_su3_soa(auxbis_conf_acc,auxbis_conf_acc_f);
-		#pragma acc update host(aux_conf_acc_f[0:8])
-		#pragma acc update host(auxbis_conf_acc_f[0:8])
-	}
-
-	if(alloc_info.stoutAllocations){
-		int stout_steps = ((act_params.topo_stout_steps>act_params.stout_steps) & (act_params.topo_action==1)?
-											  act_params.topo_stout_steps:act_params.stout_steps );
-		for (int i = 0; i < stout_steps; i++)
-			init_k(&gstout_conf_acc_arr[8*i],1,0,vec_aux_bound,&r_utils->def,1);
-		#pragma acc update device(gstout_conf_acc_arr[0:8*stout_steps])
-		if(md_parameters.singlePrecMD){
-			for (int i = 0; i < stout_steps; i++)
-				convert_double_to_float_su3_soa(&gstout_conf_acc_arr[8*i],&gstout_conf_acc_arr_f[8*i]);
-			#pragma acc update host(gstout_conf_acc_arr_f[0:8*stout_steps])
-		}
-	}
-}
-
-
-
 
 #endif // PAR_TEMP
 #endif // HPT_UTILITIES_C

@@ -6,6 +6,7 @@
 #include "../OpenAcc/double_complex.h"
 #include "../Mpi/multidev.h"
 #include "./measure_topo.h"
+#include "../Include/rep_info.h"
 
 
 typedef struct measure_wrapper_t {

@@ -15,8 +15,9 @@ int get_index_of_pbc_replica(){
   return ridx_lab0;
 }
 
-void setup_replica_utils(){
+void setup_replica_utils(char save_conf_name[100]){
   //TODO: in principle, these can be allocated on world master only (see src/OpenAcc/HPT_utilities.c)
+  r_utils->swap_number=0;
   r_utils->all_swap_vector=malloc(sizeof(int)*(rep->replicas_total_number-1));
   r_utils->acceptance_vector=malloc(sizeof(int)*(rep->replicas_total_number-1));
   r_utils->acceptance_vector_old=malloc(sizeof(int)*(rep->replicas_total_number-1));
@@ -28,7 +29,7 @@ void setup_replica_utils(){
   }
 
   //defect_info def;
-  strcpy(r_utils->aux_name_file,mc_params.save_conf_name);
+  strcpy(r_utils->aux_name_file,save_conf_name);
 }
 
 void free_replica_utils(){
@@ -40,6 +41,18 @@ void free_replica_utils(){
   free(rep->cr_vec);
   free(rep->label);
 }
+
+void label_print(rep_info * hpt_params, FILE *file, int step_number){
+
+  int i;
+  fprintf(file,"%d    ",step_number);    
+  for(i=0;i<hpt_params->replicas_total_number;i++){
+    fprintf(file,"%d    ", hpt_params->label[i]);
+  }
+  fprintf(file,"\n");
+}
+
+
 #endif // PAR_TEMP
 
 #endif

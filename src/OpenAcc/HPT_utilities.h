@@ -9,7 +9,6 @@
 #include "./alloc_settings.h"
 #include "./alloc_vars.h"
 #include "./action.h"
-#include "../Include/rep_info.h"
 
 typedef struct defect_info_t{
 	// min and max values of the logical coordinates where Delta_S_SWAP =/= 0
@@ -32,8 +31,6 @@ typedef struct defect_info_t{
 
 } defect_info;
 
-//extern defect_info *def;
-
 void counter_size_function(int d0,int d1,int d2,int d3);
 void init_k(su3_soa * conf,double c_r,int def_axis,int * def_vec,defect_info * def, int defect_info_config);
 void printing_k_mu(su3_soa * conf);
@@ -41,7 +38,6 @@ void trasl_conf( __restrict const su3_soa *  const tconf_acc,
                  __restrict const su3_soa *  const taux_conf);
 
 //void replicas_swap(su3_soa * conf1,su3_soa * conf2, int lab1, int lab2, rep_info * hpt_params);
-void label_print(rep_info * hpt_params, FILE *file, int step_number);
 
 //#ifdef GAUGE_ACT_TLSM
 //double calc_Delta_S_Symanzik_SWAP( __restrict const su3_soa * const u,
@@ -99,6 +95,16 @@ void compute_S_of_replicas(
                         dcomplex_soa * const tr_local_plaqs,
                         defect_info * def,
                         double * S_arr);
+
+typedef struct rep_info_t rep_info_t; // forward declaration
+void manage_replica_swaps(
+                    su3_soa * tconf_acc,
+										__restrict su3_soa * const loc_plaq,
+										dcomplex_soa * const tr_local_plaqs, 
+										defect_info * def, 
+                    int* swap_num,
+										int * all_swap_vet,
+										int * acceptance_vet, struct rep_info_t * hpt_params);
 
 
 #endif // PAR_TEMP

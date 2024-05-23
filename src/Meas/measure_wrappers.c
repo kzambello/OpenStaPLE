@@ -45,14 +45,15 @@ void update_acceptances(measure_wrapper *meas_wrap_ptr){
   }
 }
 
-void send_local_acceptances(measure_wrapper *meas_wrap_ptr){
 #ifdef PAR_TEMP
+void send_local_acceptances(measure_wrapper *meas_wrap_ptr){
     // send acceptance values from all ranks and receives on world master
     //TODO: this introduces some overhead, possibly optimize
     for(int ridx=0; ridx<rep->replicas_total_number; ++ridx){
       for(int salarank=0; salarank<NRANKS_D3; ++salarank){
         if(0==devinfo.myrank_world){
           if(ridx==0  && salarank==0){
+            int lab=rep->label[devinfo.replica_idx];
             meas_wrap_ptr->rankloc_accettate_therm=meas_wrap_ptr->accettate_therm[lab];
             meas_wrap_ptr->rankloc_accettate_metro=meas_wrap_ptr->accettate_metro[lab];
           }else{
@@ -67,42 +68,43 @@ void send_local_acceptances(measure_wrapper *meas_wrap_ptr){
         }
       }
     }
-#endif
 }
+#endif
 
 void sync_local_acceptances(measure_wrapper *meas_wrap_ptr, int which_mode){
 #ifdef PAR_TEMP
-    for(int ridx=0; ridx<rep->replicas_total_number; ++ridx){
-      if(0==devinfo.myrank_world){
-        if(ridx==0){
-          accettate_therm[lab]=rankloc_accettate_therm;
-          accettate_metro[lab]=rankloc_accettate_metro;
-        }else{
-          MPI_Recv((int*)&(meas_wrap_ptr->accettate_therm[rep->label[ridx]]),1,MPI_INT,ridx*NRANKS_D3,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-          MPI_Recv((int*)&(meas_wrap_ptr->accettate_metro[rep->label[ridx]]),1,MPI_INT,ridx*NRANKS_D3,1,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-        }
+  for(int ridx=0; ridx<rep->replicas_total_number; ++ridx){
+    if(0==devinfo.myrank_world){
+      if(ridx==0){
+        int lab=rep->label[devinfo.replica_idx];
+        meas_wrap_ptr->accettate_therm[lab]=meas_wrap_ptr->rankloc_accettate_therm;
+        meas_wrap_ptr->accettate_metro[lab]=meas_wrap_ptr->rankloc_accettate_metro;
       }else{
-        if(ridx==devinfo.replica_idx && devinfo.myrank==0){
-          MPI_Send((int*)&(meas_wrap_ptr->rankloc_accettate_therm),1,MPI_INT,0,0,MPI_COMM_WORLD);
-          MPI_Send((int*)&(meas_wrap_ptr->rankloc_accettate_metro),1,MPI_INT,0,1,MPI_COMM_WORLD);
-        }
+        MPI_Recv((int*)&(meas_wrap_ptr->accettate_therm[rep->label[ridx]]),1,MPI_INT,ridx*NRANKS_D3,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+        MPI_Recv((int*)&(meas_wrap_ptr->accettate_metro[rep->label[ridx]]),1,MPI_INT,ridx*NRANKS_D3,1,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+      }
+    }else{
+      if(ridx==devinfo.replica_idx && devinfo.myrank==0){
+        MPI_Send((int*)&(meas_wrap_ptr->rankloc_accettate_therm),1,MPI_INT,0,0,MPI_COMM_WORLD);
+        MPI_Send((int*)&(meas_wrap_ptr->rankloc_accettate_metro),1,MPI_INT,0,1,MPI_COMM_WORLD);
       }
     }
+  }
 #endif
-    
-        if(which_mode /* is metro */ && 0==devinfo.myrank_world){
+  
+  if(1==which_mode /* is metro */ && 0==devinfo.myrank_world){
 #ifdef PAR_TEMP
-            int iterations = meas_wrap_ptr->id_iter-meas_wrap_ptr->id_iter_offset-meas_wrap_ptr->accettate_therm[0]+1;
-            double acceptance = (double) (meas_wrap_ptr->accettate_metro[0] / iterations;
-            double acc_err = sqrt((double)meas_wrap_ptr->accettate_metro[0]*(iterations-meas_wrap_ptr->accettate_metro[0])/iterations)/iterations;
-            printf("Estimated HMC acceptance for this run [replica %d]: %f +- %f\n. Iterations: %d\n",0,acceptance, acc_err, iterations);
+    int iterations = meas_wrap_ptr->id_iter-meas_wrap_ptr->id_iter_offset-meas_wrap_ptr->accettate_therm[0]+1;
+    double acceptance = (double) (meas_wrap_ptr->accettate_metro[0] / iterations);
+    double acc_err = sqrt((double)(meas_wrap_ptr->accettate_metro[0])*(iterations-meas_wrap_ptr->accettate_metro[0])/iterations)/iterations;
+    printf("Estimated HMC acceptance for this run [replica %d]: %f +- %f\n. Iterations: %d\n",0,acceptance, acc_err, iterations);
 #else
-            int iterations = meas_wrap_ptr->id_iter-meas_wrap_ptr->id_iter_offset-meas_wrap_ptr->rankloc_accettate_therm+1;
-            double acceptance = (double) meas_wrap_ptr->rankloc_accettate_metro / iterations;
-            double acc_err = sqrt((double)(meas_wrap_ptr->rankloc_accettate_metro)*(iterations-meas_wrap_ptr->rankloc_accettate_metro)/iterations)/iterations;
-            printf("Estimated HMC acceptance for this run: %f +- %f\n. Iterations: %d\n",acceptance, acc_err, iterations);
+    int iterations = meas_wrap_ptr->id_iter-meas_wrap_ptr->id_iter_offset-meas_wrap_ptr->rankloc_accettate_therm+1;
+    double acceptance = (double) meas_wrap_ptr->rankloc_accettate_metro / iterations;
+    double acc_err = sqrt((double)(meas_wrap_ptr->rankloc_accettate_metro)*(iterations-meas_wrap_ptr->rankloc_accettate_metro)/iterations)/iterations;
+    printf("Estimated HMC acceptance for this run: %f +- %f\n. Iterations: %d\n",acceptance, acc_err, iterations);
 #endif
-        }
+  }
 }
 
 void free_meas_wrapper(measure_wrapper *meas_wrap_ptr){

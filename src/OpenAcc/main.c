@@ -99,6 +99,9 @@
 int conf_id_iter;
 int verbosity_lv;
 unsigned int myseed_default;
+#ifdef PAR_TEMP
+defect_info def_info;
+#endif
 
 void first_conf_measurement(measure_wrapper *meas_wrap_ptr){
   if(0 == mc_params.ntraj && 0 == mc_params.JarzynskiMode ){ // measures only
@@ -289,15 +292,16 @@ void print_action_HMC(char before_after[]){
 #endif
 
 }
+
 #ifdef PAR_TEMP
 void perform_replica_step(){
     if(rep->replicas_total_number>1){
         // conf swap
         if (0==devinfo.myrank_world) {printf("CONF SWAP PROPOSED\n");}
         #pragma acc update host(conf_acc[0:alloc_info.conf_acc_size])
-        manage_replica_swaps(conf_acc, aux_conf_acc, local_sums, &(r_utils->def), &swap_number,r_utils->all_swap_vector,r_utils->acceptance_vector,rep);
+        manage_replica_swaps(conf_acc, aux_conf_acc, local_sums, &def_info, &(r_utils->swap_number),r_utils->all_swap_vector,r_utils->acceptance_vector,rep);
 
-        if (0==devinfo.myrank_world) {printf("Number of accepted swaps: %d\n", swap_number);}       
+        if (0==devinfo.myrank_world) {printf("Number of accepted swaps: %d\n", r_utils->swap_number);}       
         #pragma acc update host(conf_acc[0:8])
 
         // periodic conf translation
@@ -309,7 +313,23 @@ void perform_replica_step(){
 }
 #endif
 
-
+void sync_acceptance_to_print(measure_wrapper *meas_wrap_ptr){
+#ifdef PAR_TEMP
+    if(0==devinfo.myrank_world){
+      meas_wrap_ptr->acceptance_to_print=meas_wrap_ptr->accettate_therm[0]+meas_wrap_ptr->accettate_metro[0]-meas_wrap_ptr->accettate_therm_old[0]-meas_wrap_ptr->accettate_metro_old[0];
+      int ridx_lab0 = get_index_of_pbc_replica(); // finds index corresponding to label=0
+      if(ridx_lab0!=0){
+        MPI_Send((int*)&meas_wrap_ptr->acceptance_to_print,1,MPI_INT,ridx_lab0*NRANKS_D3,0,MPI_COMM_WORLD);
+      }
+    }else{
+      if(0==rep->label[devinfo.replica_idx] && devinfo.myrank==0){
+        MPI_Recv((int*)&meas_wrap_ptr->acceptance_to_print,1,MPI_INT,0,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+      }
+    }
+#else
+    meas_wrap_ptr->acceptance_to_print=meas_wrap_ptr->rankloc_accettate_therm+meas_wrap_ptr->rankloc_accettate_metro-meas_wrap_ptr->rankloc_accettate_therm_old-meas_wrap_ptr->rankloc_accettate_metro_old;
+#endif
+}
 
 
 void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
@@ -440,11 +460,6 @@ void main_loop(){
   measure_wrapper meas_wrap;
   init_meas_wrapper(&meas_wrap,&meastopo_params, conf_id_iter);
 
-  //TODO: put into r_utils
-#ifdef PAR_TEMP
-	int swap_number=0;
-#endif
-
   // plaquette measures and polyakov loop measures.
   printf("PLAQUETTE START\n");
     
@@ -518,11 +533,13 @@ void main_loop(){
 
                 // HMC step
                 int which_mode=(meas_wrap.id_iter<mc_params.therm_ntraj)? 0 : 1; // 0: therm, 1: metro
-                int *rankloc_accettate_which[2]={&(meas_wrap.rankloc_accettate_therm),(int*)&(meas_wrap.rankloc_accettate_metro)};
+                int *rankloc_accettate_which[2]={(int*)&(meas_wrap.rankloc_accettate_therm),(int*)&(meas_wrap.rankloc_accettate_metro)};
                 int effective_iter = meas_wrap.id_iter-meas_wrap.id_iter_offset-(which_mode==1? meas_wrap.rankloc_accettate_therm : 0);
 
 
+#ifdef PAR_TEMP
                 send_local_acceptances(&meas_wrap);
+#endif
     
                 *rankloc_accettate_which[which_mode] = UPDATE_SOLOACC_UNOSTEP_VERSATILE(conf_acc,
                                                           md_parameters.residue_metro,md_parameters.residue_md, effective_iter,
@@ -530,6 +547,7 @@ void main_loop(){
 
                 // sync acceptance array on world master
                 sync_local_acceptances(&meas_wrap,which_mode);
+
                 #pragma acc update host(conf_acc[0:8])
 
                 // final action
@@ -550,64 +568,50 @@ void main_loop(){
           if(devinfo.myrank_world ==0){
     
               if(rep->replicas_total_number>1){
-                  file_label=fopen(acc_info->file_label_name,"at");
-                  if(!file_label){file_label=fopen(acc_info->file_label_name,"wt");}
-                  label_print(rep, file_label, conf_id_iter);
+                  r_utils->file_label=fopen(acc_info->file_label_name,"at");
+                  if(!(r_utils->file_label)){r_utils->file_label=fopen(acc_info->file_label_name,"wt");}
+                  label_print(rep, r_utils->file_label, conf_id_iter);
 
-                  hmc_acc_file=fopen(acc_info->hmc_file_name,"at");
-                  if(!hmc_acc_file){hmc_acc_file=fopen(acc_info->hmc_file_name,"wt");}
-                  fprintf(hmc_acc_file,"%d\t",conf_id_iter);
+                  r_utils->hmc_acc_file=fopen(acc_info->hmc_file_name,"at");
+                  if(!r_utils->hmc_acc_file){r_utils->hmc_acc_file=fopen(acc_info->hmc_file_name,"wt");}
+                  fprintf(r_utils->hmc_acc_file,"%d\t",conf_id_iter);
           
-                  swap_acc_file=fopen(acc_info->swap_file_name,"at");
-                  if(!swap_acc_file){swap_acc_file=fopen(acc_info->swap_file_name,"wt");}
-                  fprintf(swap_acc_file,"%d\t",conf_id_iter);
+                  r_utils->swap_acc_file=fopen(acc_info->swap_file_name,"at");
+                  if(!r_utils->swap_acc_file){r_utils->swap_acc_file=fopen(acc_info->swap_file_name,"wt");}
+                  fprintf(r_utils->swap_acc_file,"%d\t",conf_id_iter);
 
               }
 // print   acceptances
               for(int lab=0;lab<rep->replicas_total_number;lab++){
                   if(lab<rep->replicas_total_number-1){
-                      mean_acceptance=(double)r_utils->acceptance_vector[lab]/r_utils->all_swap_vector[lab];
-                      printf("replica couple [labels: %d/%d]: proposed %d, accepted %d, mean_acceptance %f\n",lab,lab+1,r_utils->all_swap_vector[lab],r_utils->acceptance_vector[lab],mean_acceptance);
+                      r_utils->mean_acceptance=(double)r_utils->acceptance_vector[lab]/r_utils->all_swap_vector[lab];
+                      printf("replica couple [labels: %d/%d]: proposed %d, accepted %d, mean_acceptance %f\n",lab,lab+1,r_utils->all_swap_vector[lab],r_utils->acceptance_vector[lab],r_utils->mean_acceptance);
                       if(rep->replicas_total_number>1){
-                          fprintf(swap_acc_file,"%d\t",r_utils->acceptance_vector[lab]-r_utils->acceptance_vector_old[lab]);
+                          fprintf(r_utils->swap_acc_file,"%d\t",r_utils->acceptance_vector[lab]-r_utils->acceptance_vector_old[lab]);
                       }
                   }
 
                   if(rep->replicas_total_number>1){
-                      fprintf(hmc_acc_file,"%d\t", meas_wrap.accettate_therm[lab]+meas_wrap.accettate_metro[lab] -meas_wrap.accettate_therm_old[lab]-meas_wrap.accettate_metro_old[lab]);
+                      fprintf(r_utils->hmc_acc_file,"%d\t", meas_wrap.accettate_therm[lab]+meas_wrap.accettate_metro[lab] -meas_wrap.accettate_therm_old[lab]-meas_wrap.accettate_metro_old[lab]);
                   }
       
               }
     
               if(rep->replicas_total_number>1){
     
-                  fprintf(hmc_acc_file,"\n");
-                  fprintf(swap_acc_file,"\n");
+                  fprintf(r_utils->hmc_acc_file,"\n");
+                  fprintf(r_utils->swap_acc_file,"\n");
     
-                  fclose(hmc_acc_file);
-                  fclose(swap_acc_file);
-                  fclose(file_label);
+                  fclose(r_utils->hmc_acc_file);
+                  fclose(r_utils->swap_acc_file);
+                  fclose(r_utils->file_label);
     
               }
           }
 #endif
   
     // gauge stuff measures
-#ifdef PAR_TEMP
-    if(0==devinfo.myrank_world){
-      meas_wrap.acceptance_to_print=meas_wrap.accettate_therm[0]+meas_wrap.accettate_metro[0]-meas_wrap.accettate_therm_old[0]-meas_wrap.accettate_metro_old[0];
-      int ridx_lab0 = get_index_of_pbc_replica(); // finds index corresponding to label=0
-      if(ridx_lab0!=0){
-        MPI_Send((int*)&meas_wrap.acceptance_to_print,1,MPI_INT,ridx_lab0*NRANKS_D3,0,MPI_COMM_WORLD);
-      }
-    }else{
-      if(0==rep->label[devinfo.replica_idx] && devinfo.myrank==0){
-        MPI_Recv((int*)&meas_wrap.acceptance_to_print,1,MPI_INT,0,0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-      }
-    }
-#else
-    meas_wrap.acceptance_to_print=meas_wrap.rankloc_accettate_therm+meas_wrap.rankloc_accettate_metro-meas_wrap.rankloc_accettate_therm_old-meas_wrap.rankloc_accettate_metro_old;
-#endif
+    sync_acceptance_to_print(&meas_wrap);
 
 
     perform_all_measurements(&meas_wrap);
@@ -643,7 +647,7 @@ void main_loop(){
           }else
               MPI_PRINTF0("WARNING, \'SaveAllAtEnd\'=0,NOT SAVING/OVERWRITING CONF AND RNG STATUS.\n\n\n");
 #ifdef PAR_TEMP        
-          strcpy(mc_params.save_conf_name,aux_name_file);
+          strcpy(mc_params.save_conf_name,r_utils->aux_name_file);
 #endif
       }
       if (debug_settings.SaveAllAtEnd){
@@ -817,17 +821,17 @@ void read_or_generate_conf(){
       for(int ri=0; ri<rep->replicas_total_number; ++ri)
         rep->label[ri]=ri;
       if(devinfo.myrank_world ==0){ // write first labeling (usual increasing order)
-        file_label=fopen(acc_info->file_label_name,"at");
-        if(!file_label){file_label=fopen(acc_info->file_label_name,"wt");} // create label file
+        r_utils->file_label=fopen(acc_info->file_label_name,"at");
+        if(!r_utils->file_label){r_utils->file_label=fopen(acc_info->file_label_name,"wt");} // create label file
 
-        label_print(rep, file_label, conf_id_iter); // populate it
-        fclose(file_label);
+        label_print(rep, r_utils->file_label, conf_id_iter); // populate it
+        fclose(r_utils->file_label);
       }
       if (0==devinfo.myrank_world) printf("%d/%d Defect initialization\n",devinfo.replica_idx,rep->replicas_total_number); 
     }else{ // not first iteration: initialize boundaries from label file
       if(devinfo.myrank_world ==0){ // read labeling from file
-        file_label=fopen(acc_info->file_label_name,"r");
-        if(!file_label){ 
+        r_utils->file_label=fopen(acc_info->file_label_name,"r");
+        if(!r_utils->file_label){ 
           printf("\n\nERROR! Cannot open label file.\n\n");
 #ifdef MULTIDEVICE
           MPI_Abort(MPI_COMM_WORLD,1);			
@@ -838,25 +842,25 @@ void read_or_generate_conf(){
           // read label file
           int itr_num=-1,trash_bin;
           printf("conf_id_iter: %d\n",conf_id_iter);
-          while(fscanf(file_label,"%d",&itr_num)==1){
+          while(fscanf(r_utils->file_label,"%d",&itr_num)==1){
             printf("%d ",itr_num);
             for(int idx=0; idx<NREPLICAS; ++idx){
-              fscanf(file_label,"%d",(itr_num==conf_id_iter)? &(rep->label[idx]) : &trash_bin);
+              fscanf(r_utils->file_label,"%d",(itr_num==conf_id_iter)? &(rep->label[idx]) : &trash_bin);
               printf("%d ",(itr_num==conf_id_iter)? (rep->label[idx]) : trash_bin);
             }
             printf("\n");
           }
-          fclose(file_label);
+          fclose(r_utils->file_label);
         }
       }
       // broadcast it to all replicas and ranks 
       MPI_Bcast((void*)&(rep->label[0]),NREPLICAS,MPI_INT,0,MPI_COMM_WORLD);
     }
-		strcpy(mc_params.save_conf_name,aux_name_file);
+		strcpy(mc_params.save_conf_name,r_utils->aux_name_file);
 		
-    init_k(conf_acc,rep->cr_vec[rep->label[devinfo.replica_idx]],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,0);
+    init_k(conf_acc,rep->cr_vec[rep->label[devinfo.replica_idx]],rep->defect_boundary,rep->defect_coordinates,&def_info,0);
 #if NRANKS_D3 > 1
-    if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep->label[devinfo.replica_idx]],rep->defect_boundary,rep->defect_coordinates,&r_utils->def,1);
+    if(devinfo.async_comm_gauge) init_k(&conf_acc[8],rep->cr_vec[rep->label[devinfo.replica_idx]],rep->defect_boundary,rep->defect_coordinates,&def_info,1);
 #endif
 		#pragma acc update device(conf_acc[0:alloc_info.conf_acc_size])
 
@@ -970,7 +974,37 @@ void allocate_memory(){
   MPI_PRINTF1("Total allocated memory: %zu \n\n\n",max_memory_used);
 }
 
+#ifdef PAR_TEMP
+void assign_replica_defects(defect_info *def){
+  int vec_aux_bound[3]={1,1,1};
 
+	if (0==devinfo.myrank_world) printf("Auxiliary confs defect initialization\n");
+  init_k(   aux_conf_acc,1,0,vec_aux_bound,def,1);
+  init_k(auxbis_conf_acc,1,0,vec_aux_bound,def,1);
+	#pragma acc update device(aux_conf_acc[0:8])
+	#pragma acc update device(auxbis_conf_acc[0:8])
+
+	if(md_parameters.singlePrecMD){
+		convert_double_to_float_su3_soa(   aux_conf_acc,   aux_conf_acc_f);
+		convert_double_to_float_su3_soa(auxbis_conf_acc,auxbis_conf_acc_f);
+		#pragma acc update host(aux_conf_acc_f[0:8])
+		#pragma acc update host(auxbis_conf_acc_f[0:8])
+	}
+
+	if(alloc_info.stoutAllocations){
+		int stout_steps = ((act_params.topo_stout_steps>act_params.stout_steps) & (act_params.topo_action==1)?
+											  act_params.topo_stout_steps:act_params.stout_steps );
+		for (int i = 0; i < stout_steps; i++)
+			init_k(&gstout_conf_acc_arr[8*i],1,0,vec_aux_bound,def,1);
+		#pragma acc update device(gstout_conf_acc_arr[0:8*stout_steps])
+		if(md_parameters.singlePrecMD){
+			for (int i = 0; i < stout_steps; i++)
+				convert_double_to_float_su3_soa(&gstout_conf_acc_arr[8*i],&gstout_conf_acc_arr_f[8*i]);
+			#pragma acc update host(gstout_conf_acc_arr_f[0:8*stout_steps])
+		}
+	}
+}
+#endif // def PAR_TEMP
 
 
 void initial_setup(int argc, char* argv[]){
@@ -1022,7 +1056,7 @@ void initial_setup(int argc, char* argv[]){
   assign_device();
 
 #ifdef PAR_TEMP
-  setup_replica_utils();
+  setup_replica_utils(mc_params.save_conf_name);
 #endif
 
   // set RNG seed
@@ -1073,7 +1107,7 @@ void initial_setup(int argc, char* argv[]){
   read_or_generate_conf();
 
 #ifdef PAR_TEMP
-  assign_replica_defects();
+  assign_replica_defects(&def_info);
 #endif 
 	
   // check conf sanity
@@ -1097,7 +1131,7 @@ void save_conf_and_status(){
       save_conf_wrapper(conf_acc,mc_params.save_conf_name, conf_id_iter, debug_settings.use_ildg);
     }else MPI_PRINTF0("WARNING, \'SaveAllAtEnd\'=0,NOT SAVING/OVERWRITING CONF AND RNG STATUS.\n\n\n");
 #ifdef PAR_TEMP
-    strcpy(mc_params.save_conf_name,aux_name_file);
+    strcpy(mc_params.save_conf_name,r_utils->aux_name_file);
 #endif
 
   // save RNG status
