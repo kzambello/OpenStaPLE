@@ -195,6 +195,7 @@ SaveResults                   0                   #(int)
 # Remove or comment when running without parallel tempering (i.e., with 1 replica)
 ReplicasNumbers
 totalnumber      2         # Total number of replicas
+meas_all_reps    0         # do measurements also on all replica indexes (labels recorded as second column in files)
 is_evenodd       0         # Propose swaps to all even and then to all odd couples (1==YES, 0==NO, SERIAL ORDER)
 defect_boundary  1         # This parameter sets the direction along which the defect will be implemented on: 0=n0, 1=n1, 2=n2, 3=n3
 defect_size0     2         # <
