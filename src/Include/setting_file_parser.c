@@ -773,22 +773,25 @@ int read_test_setting(test_info * ti,char filelines[MAXLINES][MAXLINELENGTH], in
 int read_replicas_numbers(rep_info * re,char filelines[MAXLINES][MAXLINELENGTH], int startline, int endline){
 
 	const int totalnumber_def = 1;
+  const int meas_all_reps_def = 0;
   const int is_evenodd_def = 1;
 	const int defect_boundary_def = 0;
 	par_info rp[]={
 #ifndef PAR_TEMP        
 								 (par_info){(void*) IGNORE_IT, TYPE_INT,"totalnumber",    (const void*) &totalnumber_def,     NULL},
+								 (par_info){(void*) IGNORE_IT, TYPE_INT,"meas_all_reps",    (const void*) &meas_all_reps_def,     NULL},
 								 (par_info){(void*) IGNORE_IT, TYPE_INT,"is_evenodd",    (const void*) &is_evenodd_def,     NULL},
 								 (par_info){(void*) IGNORE_IT, TYPE_INT,"defect_boundary",(const void*) &defect_boundary_def, NULL},
 #else
 								 (par_info){(void*) &(re->replicas_total_number),TYPE_INT,"totalnumber",NULL, NULL},
+								 (par_info){(void*) &(re->meas_all_reps),TYPE_INT,"meas_all_reps",NULL, NULL},
 								 (par_info){(void*) &(re->is_evenodd),TYPE_INT,"is_evenodd",NULL, NULL},
 								 (par_info){(void*) &(re->defect_boundary),TYPE_INT,"defect_boundary",NULL, NULL},
 #endif
 	};
 
     
-	int res = scan_group_NV(sizeof(rp)/sizeof(par_info),rp, filelines, startline, startline+4);
+	int res = scan_group_NV(sizeof(rp)/sizeof(par_info),rp, filelines, startline, startline+5);
 
 //  //TODO: make it readable from file
 //  re->is_evenodd=1;
@@ -818,7 +821,7 @@ int read_replicas_numbers(rep_info * re,char filelines[MAXLINES][MAXLINELENGTH],
 		rp1[i2].comment=NULL;
 	}
 
-	startline=startline+3;
+	startline=startline+4;
     
 	int res1 = scan_group_NV(3,rp1, filelines, startline, startline+4);
 	if(res1!=0){ res=res1;}

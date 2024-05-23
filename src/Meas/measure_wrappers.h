@@ -6,6 +6,7 @@
 #include "../OpenAcc/double_complex.h"
 #include "../Mpi/multidev.h"
 #include "./measure_topo.h"
+#include "./gauge_meas.h"
 #include "../Include/rep_info.h"
 
 
@@ -36,6 +37,10 @@ typedef struct measure_wrapper_t {
 #endif
 
   int acceptance_to_print;
+
+  char pathgauge_rep_idx[50];
+  char  pathcool_rep_idx[50];
+  char pathstout_rep_idx[50];
 
 } measure_wrapper;
 

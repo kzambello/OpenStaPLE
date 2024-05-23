@@ -25,6 +25,19 @@ void init_meas_wrapper(measure_wrapper *meas_wrap_ptr,meastopo_param *meastopo_p
       meas_wrap_ptr->accettate_metro_old[lab]=0;
     }
   }
+
+  char idx_str[8];
+  sprintf(idx_str,"_i%d", devinfo.replica_idx);
+
+  strcpy(meas_wrap_ptr->pathcool_rep_idx, meastopo_params_ptr->pathcool);
+  strcat(meas_wrap_ptr->pathcool_rep_idx, idx_str);
+
+  strcpy(meas_wrap_ptr->pathstout_rep_idx, meastopo_params_ptr->pathstout);
+  strcat(meas_wrap_ptr->pathstout_rep_idx, idx_str);
+
+  strcpy(meas_wrap_ptr->pathgauge_rep_idx, gauge_outfilename);
+  strcat(meas_wrap_ptr->pathgauge_rep_idx, idx_str);
+
 #endif
 
   meas_wrap_ptr->id_iter_offset=conf_id_iter;
@@ -105,6 +118,7 @@ void sync_local_acceptances(measure_wrapper *meas_wrap_ptr, int which_mode){
     printf("Estimated HMC acceptance for this run: %f +- %f\n. Iterations: %d\n",acceptance, acc_err, iterations);
 #endif
   }
+
 }
 
 void free_meas_wrapper(measure_wrapper *meas_wrap_ptr){

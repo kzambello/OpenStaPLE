@@ -8,6 +8,7 @@
 //TODO: remove from code if ndef PAR_TEMP
 typedef struct rep_info_t {    
 	int replicas_total_number;
+  int meas_all_reps;
   int is_evenodd;
 	int defect_boundary;
 	int defect_coordinates[3];

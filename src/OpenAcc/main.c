@@ -78,8 +78,15 @@
 #include "../Include/stringify.h"
 
 #include <errno.h>
-#include "./HPT_utilities.h"
+#include <sys/stat.h>
+
+int check_file_exists(const char *filename) {
+    struct stat buffer;
+    return (stat(filename, &buffer) == 0);
+}
 #include <time.h>
+
+#include "./HPT_utilities.h"
 
 // double level macro, necessary to stringify
 // https://gcc.gnu.org/onlinedocs/cpp/Stringification.html
@@ -88,7 +95,7 @@
 
 #ifdef PAR_TEMP
 #define IF_PERIODIC_REPLICA() \
-  if(rep->label[devinfo.replica_idx]==0) 
+  if(0==rep->label[devinfo.replica_idx]) 
 #else
 #define IF_PERIODIC_REPLICA()
 #endif 
@@ -334,7 +341,10 @@ void sync_acceptance_to_print(measure_wrapper *meas_wrap_ptr){
 
 void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
 
-  IF_PERIODIC_REPLICA()
+  // perform measurement on the periodic replica, or in all if activated meas_all_reps
+#ifdef PAR_TEMP
+  if(0==rep->label[devinfo.replica_idx] || 1==rep->meas_all_reps) 
+#endif
   {
     printf("===========GAUGE MEASURING============\n");
       
@@ -360,20 +370,37 @@ void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
       }
       MPI_PRINTF0("Printing cooled charge - only by master rank...\n");
       if(devinfo.myrank ==0){
-        FILE *cooloutfile = fopen(meastopo_params.pathcool,"at");
-        if(!cooloutfile){
-          cooloutfile = fopen(meastopo_params.pathcool,"wt");
-          char coolheader[35];
-          strcpy(coolheader,"#conf_id\tCoolStp\tTopoChCool\n");
-          fprintf(cooloutfile,"%s",coolheader);
-        }
-        if(cooloutfile){
+        FILE *cooloutfile;
+        IF_PERIODIC_REPLICA()
+        {
+          if(!check_file_exists(meastopo_params.pathcool)){ 
+            cooloutfile = fopen(meastopo_params.pathcool,"wt");
+            fprintf(cooloutfile,"#conf_id\tCoolStp\tTopoChCool\n");  
+            fclose(cooloutfile);
+          }
+          cooloutfile = fopen(meastopo_params.pathcool,"at");
           for(int i = 0; i <= meastopo_params.coolmeasstep/meastopo_params.cool_measinterval;i++)
             fprintf(cooloutfile,"%d\t%d\t%18.18lf\n",conf_id_iter,
                     i*meastopo_params.cool_measinterval,
                     meas_wrap_ptr->cool_topo_ch[i]);
+          fclose(cooloutfile);
         }
-        fclose(cooloutfile);
+#ifdef PAR_TEMP
+        if(1==rep->meas_all_reps){ // replica dependent measurements
+          if(!check_file_exists(meas_wrap_ptr->pathcool_rep_idx)){ 
+            cooloutfile = fopen(meas_wrap_ptr->pathcool_rep_idx,"wt");
+            fprintf(cooloutfile,"#conf_id\trep_lab\tCoolStp\tTopoChCool\n");
+            fclose(cooloutfile);
+          }
+          cooloutfile = fopen(meas_wrap_ptr->pathcool_rep_idx,"at");
+          for(int i = 0; i <= meastopo_params.coolmeasstep/meastopo_params.cool_measinterval;i++)
+            fprintf(cooloutfile,"%d\t%d\t%d\t%18.18lf\n",conf_id_iter,
+                    rep->label[devinfo.replica_idx],
+                    i*meastopo_params.cool_measinterval,
+                    meas_wrap_ptr->cool_topo_ch[i]);
+          fclose(cooloutfile);
+        }
+#endif
       }
     }
 
@@ -387,32 +414,53 @@ void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
 
       MPI_PRINTF0("Printing stouted charge - only by master rank...\n");
       if(devinfo.myrank ==0){
-        FILE *stoutoutfile = fopen(meastopo_params.pathstout,"at");
-        if(!stoutoutfile){
-          stoutoutfile = fopen(meastopo_params.pathstout,"wt");
-          char stoutheader[35];
-          strcpy(stoutheader,"#conf_id\tStoutStp\tTopoChStout\n");
-          fprintf(stoutoutfile,"%s",stoutheader);
-        }
-        if(stoutoutfile){
+        FILE *stoutoutfile;
+        IF_PERIODIC_REPLICA()
+        {
+          if(!check_file_exists(meastopo_params.pathstout)){ 
+            stoutoutfile = fopen(meastopo_params.pathstout,"wt");
+            fprintf(stoutoutfile,"#conf_id\tStoutStp\tTopoChStout\n");
+            fclose(stoutoutfile);
+          }
+          stoutoutfile = fopen(meastopo_params.pathstout,"at");
           for(int i = 0; i <= meastopo_params.stoutmeasstep/meastopo_params.stout_measinterval;i++)
             fprintf(stoutoutfile,"%d\t%d\t%18.18lf\n",conf_id_iter,
                     i*meastopo_params.stout_measinterval,
                     meas_wrap_ptr->stout_topo_ch[i]);
+          fclose(stoutoutfile);
         }
-        fclose(stoutoutfile);
+#ifdef PAR_TEMP
+        if(1==rep->meas_all_reps){ // replica dependent measurements
+          if(!check_file_exists(meas_wrap_ptr->pathstout_rep_idx)){ 
+            stoutoutfile = fopen(meas_wrap_ptr->pathstout_rep_idx,"wt");
+            fprintf(stoutoutfile,"#conf_id\trep_lab\tStoutStp\tTopoChStout\n");
+            fclose(stoutoutfile);
+          }
+          stoutoutfile = fopen(meas_wrap_ptr->pathstout_rep_idx,"at");
+
+
+          for(int i = 0; i <= meastopo_params.stoutmeasstep/meastopo_params.stout_measinterval;i++)
+            fprintf(stoutoutfile,"%d\t%d\t%d\t%18.18lf\n",conf_id_iter,
+                    rep->label[devinfo.replica_idx],
+                    i*meastopo_params.stout_measinterval,
+                    meas_wrap_ptr->stout_topo_ch[i]);
+          fclose(stoutoutfile);
+        }
+#endif // def PAR_TEMP
       }
     }//if stout end
 
     MPI_PRINTF0("Printing gauge obs - only by master rank...\n");
     if(devinfo.myrank ==0){
-      FILE *goutfile = fopen(gauge_outfilename,"at");
-      if(!goutfile){
-        goutfile = fopen(gauge_outfilename,"wt");
-        strcpy(gauge_outfile_header,"#conf_id\tacc\tplq\trect\tReP\tImP\n");
-        fprintf(goutfile,"%s",gauge_outfile_header);
-      }
-      if(goutfile){
+      FILE *goutfile;
+      IF_PERIODIC_REPLICA()
+      {
+        if(!check_file_exists(gauge_outfilename)){ 
+          goutfile = fopen(gauge_outfilename,"wt");
+          fprintf(goutfile,"#conf_id\tacc\tplq\trect\tReP\tImP\n");
+          fclose(goutfile);
+        }
+        goutfile = fopen(gauge_outfilename,"at");
         if(meas_wrap_ptr->id_iter<mc_params.therm_ntraj){
           printf("Therm_iter %d",conf_id_iter );
           printf("Plaquette = %.18lf    ", meas_wrap_ptr->plq/GL_SIZE/6.0/3.0);
@@ -425,8 +473,34 @@ void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
                 meas_wrap_ptr->plq/GL_SIZE/6.0/3.0,
                 meas_wrap_ptr->rect/GL_SIZE/6.0/3.0/2.0, 
                 creal(meas_wrap_ptr->poly), cimag(meas_wrap_ptr->poly));
+        fclose(goutfile);
       }
-      fclose(goutfile);
+#ifdef PAR_TEMP
+      if(1==rep->meas_all_reps){ // replica dependent measurements
+        if(!check_file_exists(meas_wrap_ptr->pathgauge_rep_idx)){ 
+          goutfile = fopen(meas_wrap_ptr->pathgauge_rep_idx,"wt");
+          fprintf(goutfile,"#conf_id\trep_lab\tacc\tplq\trect\tReP\tImP\n");
+          fclose(goutfile);
+        }
+        goutfile = fopen(meas_wrap_ptr->pathgauge_rep_idx,"at");
+        if(meas_wrap_ptr->id_iter<mc_params.therm_ntraj){
+          MPI_PRINTF1("Therm_iter %d",conf_id_iter );
+          MPI_PRINTF1("Plaquette = %.18lf    ", meas_wrap_ptr->plq/GL_SIZE/6.0/3.0);
+          MPI_PRINTF1("Rectangle = %.18lf\n",meas_wrap_ptr->rect/GL_SIZE/6.0/3.0/2.0);
+        }else MPI_PRINTF1("Metro_iter %d   Plaquette= %.18lf    Rectangle = %.18lf\n",conf_id_iter,meas_wrap_ptr->plq/GL_SIZE/6.0/3.0,meas_wrap_ptr->rect/GL_SIZE/6.0/3.0/2.0);
+
+        fprintf(goutfile,"%d\t%d\t%d\t",
+            conf_id_iter,
+            rep->label[devinfo.replica_idx],
+            meas_wrap_ptr->acceptance_to_print);
+              
+        fprintf(goutfile,"%.18lf\t%.18lf\t%.18lf\t%.18lf\n",
+                meas_wrap_ptr->plq/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->rect/GL_SIZE/6.0/3.0/2.0, 
+                creal(meas_wrap_ptr->poly), cimag(meas_wrap_ptr->poly));
+        fclose(goutfile);
+      }
+#endif // def PAR_TEMP
     }
   }
 }
