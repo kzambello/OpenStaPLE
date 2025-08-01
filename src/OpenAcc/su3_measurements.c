@@ -212,6 +212,33 @@ double  calc_plaquette_soloopenacc(__restrict  su3_soa * const tconf_acc,
 	return total_result;
 }
 
+///
+
+double  calc_s4op_soloopenacc(__restrict  su3_soa * const tconf_acc, 
+																	 __restrict su3_soa * const local_plaqs, 
+																	 dcomplex_soa * const tr_local_plaqs, const int mu)
+{
+
+	double result=0.0;
+	double total_result=0.0;
+
+	int i_counter=0;
+        for(int nu=0;nu<4;nu++){
+            if (nu != mu) {
+ 		     result  += calc_loc_diffplaquettes_nnptrick(tconf_acc,local_plaqs,tr_local_plaqs,mu,nu); // here all the plaquettes of a specific plane's choice are computed.
+            }
+	}
+
+#if NRANKS_D3 > 1
+	MPI_Allreduce((void*)&result,(void*)&total_result,
+								1,MPI_DOUBLE,MPI_SUM,devinfo.mpi_comm);
+#else
+	total_result = result;
+#endif
+	return total_result;
+}
+///
+
 double calc_force_norm(const __restrict tamat_soa * tipdot)
 {
 

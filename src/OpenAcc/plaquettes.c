@@ -79,6 +79,90 @@ double calc_loc_plaquettes_nnptrick(__restrict const su3_soa * const u,
   return res_R_p;
 } // closes routine
 
+
+
+///
+
+double calc_loc_diffplaquettes_nnptrick(__restrict const su3_soa * const u,
+																		__restrict su3_soa * const loc_plaq, 
+																		dcomplex_soa * const tr_local_plaqs,
+																		const int mu, const int nu)
+{
+	#pragma acc kernels present(u) present(loc_plaq) present(tr_local_plaqs)
+	#pragma acc loop independent gang(STAPGANG3)
+  for(int d3=D3_HALO; d3<nd3-D3_HALO; d3++) {
+		#pragma acc loop independent tile(STAPTILE0,STAPTILE1,STAPTILE2)
+    for(int d2=0; d2<nd2; d2++) {
+      for(int d1=0; d1<nd1; d1++) {
+				for(int d0=0; d0 < nd0; d0++) {
+              
+					int idxh,idxpmu,idxpnu;
+					int parity, mu_parity;
+					int dir_muA,dir_nuB;
+					int dir_muC,dir_nuD;
+	    
+					mu_parity = -1;
+                                        if ( ((mu == 0) && (d0 % 2 == 0)) || ((mu == 1) && (d1 % 2 == 0)) || ((mu == 2) && (d2 % 2 == 0)) || ((mu == 3) && (d3 % 2 == 0)))
+                                        {
+					   mu_parity = 1;
+					} 
+
+					idxh = snum_acc(d0,d1,d2,d3);
+					parity = (d0+d1+d2+d3) % 2;
+	    
+					dir_muA = 2*mu +  parity;
+					dir_muC = 2*mu + !parity;
+					idxpmu = nnp_openacc[idxh][mu][parity]; // r+mu
+	    
+					dir_nuB = 2*nu + !parity;
+					dir_nuD = 2*nu +  parity;
+					idxpnu = nnp_openacc[idxh][nu][parity]; // r+nu
+	    
+					//       r+nu (C)  r+mu+nu
+					//          +<---+
+					// nu       |    ^
+					// ^    (D) V    | (B)
+					// |        +--->+
+					// |       r  (A)  r+mu
+					// +---> mu
+	    
+					mat1_times_mat2_into_mat3_absent_stag_phases(&u[dir_muA],idxh,&u[dir_nuB],idxpmu,&loc_plaq[parity],idxh); // loc_plaq = A * B
+					mat1_times_conj_mat2_into_mat1_absent_stag_phases(&loc_plaq[parity],idxh,&u[dir_muC],idxpnu);             // loc_plaq = loc_plaq * C
+					mat1_times_conj_mat2_into_mat1_absent_stag_phases(&loc_plaq[parity],idxh,&u[dir_nuD],idxh);               // loc_plaq = loc_plaq * D
+	    
+					d_complex tmp_aux = matrix_trace_absent_stag_phase(&loc_plaq[parity],idxh);
+					tr_local_plaqs[parity].c[idxh] = creal(tmp_aux)+cimag(tmp_aux)*I;
+					tr_local_plaqs[parity].c[idxh] *= mu_parity;
+		
+#ifdef PAR_TEMP
+					// K_mu_nu computation;
+					double K_mu_nu=(u[dir_muA].K.d[idxh])*(u[dir_nuB].K.d[idxpmu])*(u[dir_muC].K.d[idxpnu])*(u[dir_nuD].K.d[idxh]);
+					tr_local_plaqs[parity].c[idxh] *= K_mu_nu;
+#endif
+		
+				} // d0
+      } // d1
+    } // d2
+  } // d3
+  
+  double res_R_p = 0.0;
+  double res_I_p = 0.0;
+  double resR = 0.0;
+  int t; // WARNING: only good for 1D cut
+	#pragma acc kernels present(tr_local_plaqs)
+	#pragma acc loop reduction(+:res_R_p) reduction(+:res_I_p)
+  for(t=(LNH_SIZEH-LOC_SIZEH)/2; t  < (LNH_SIZEH+LOC_SIZEH)/2; t++) {
+    res_R_p += creal(tr_local_plaqs[0].c[t]); // even sites plaquettes
+    res_R_p += creal(tr_local_plaqs[1].c[t]); // odd sites plaquettes
+  }
+  return res_R_p;
+} // closes routine
+
+
+///
+
+
+
 // routine to compute the staples for each site on a given plane mu-nu and sum the result to the local stored staples
 void calc_loc_staples_nnptrick_all(__restrict const su3_soa * const u,
 																	 __restrict su3_soa * const loc_stap)

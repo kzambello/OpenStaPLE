@@ -128,10 +128,22 @@ void first_conf_measurement(measure_wrapper *meas_wrap_ptr){
       MPI_PRINTF0("multidevice rectangle computation with Wilson action not implemented\n");
 #endif 
       meas_wrap_ptr->poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);//misura polyakov loop
+
+      meas_wrap_ptr->s4op = sqrt(  pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,0),2)
+                                 + pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,1),2)
+                                 + pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,2),2)
+                                 + pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,3),2));
+
+      meas_wrap_ptr->s4op_0 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,0);
+      meas_wrap_ptr->s4op_1 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,1);
+      meas_wrap_ptr->s4op_2 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,2);
+      meas_wrap_ptr->s4op_3 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,3);
         
       printf("Plaquette     : %.18lf\n" ,meas_wrap_ptr->plq/GL_SIZE/3.0/6.0);
       printf("Rectangle     : %.18lf\n" ,meas_wrap_ptr->rect/GL_SIZE/3.0/6.0/2.0);
       printf("Polyakov Loop : (%.18lf,%.18lf) \n",creal(meas_wrap_ptr->poly),cimag(meas_wrap_ptr->poly));
+      printf("|S4OP|        : %.18lf\n" ,meas_wrap_ptr->s4op/GL_SIZE/3.0/6.0);
+      printf("S4OP          : (%.18lf,%.18lf,%.18lf,%.18lf)\n" ,meas_wrap_ptr->s4op_0/GL_SIZE/3.0/6.0,meas_wrap_ptr->s4op_1/GL_SIZE/3.0/6.0,meas_wrap_ptr->s4op_2/GL_SIZE/3.0/6.0,meas_wrap_ptr->s4op_3/GL_SIZE/3.0/6.0);
 
       // fermionic stuff measures
       //
@@ -355,6 +367,16 @@ void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
     MPI_PRINTF0("multidevice rectangle computation with Wilson action not implemented\n");
 #endif
     meas_wrap_ptr->poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);
+
+    meas_wrap_ptr->s4op = sqrt(  pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,0),2)
+                               + pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,1),2)
+                               + pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,2),2)
+                               + pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,3),2));
+
+    meas_wrap_ptr->s4op_0 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,0);
+    meas_wrap_ptr->s4op_1 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,1);
+    meas_wrap_ptr->s4op_2 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,2);
+    meas_wrap_ptr->s4op_3 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,3);
       
     if(meastopo_params.meascool && conf_id_iter%meastopo_params.cooleach==0){
       su3_soa *conf_to_use;
@@ -457,7 +479,7 @@ void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
       {
         if(!check_file_exists(gauge_outfilename)){ 
           goutfile = fopen(gauge_outfilename,"wt");
-          fprintf(goutfile,"#conf_id\tacc\tplq\trect\tReP\tImP\n");
+          fprintf(goutfile,"#conf_id\tacc\tplq\trect\tReP\tImP\tS4OP\tS4OP_0\tS4OP_1\tS4OP_2\tS4OP_3\n");
           fclose(goutfile);
         }
         goutfile = fopen(gauge_outfilename,"at");
@@ -469,17 +491,22 @@ void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
 
         fprintf(goutfile,"%d\t%d\t",conf_id_iter,meas_wrap_ptr->acceptance_to_print);
               
-        fprintf(goutfile,"%.18lf\t%.18lf\t%.18lf\t%.18lf\n",
+        fprintf(goutfile,"%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\n",
                 meas_wrap_ptr->plq/GL_SIZE/6.0/3.0,
                 meas_wrap_ptr->rect/GL_SIZE/6.0/3.0/2.0, 
-                creal(meas_wrap_ptr->poly), cimag(meas_wrap_ptr->poly));
+                creal(meas_wrap_ptr->poly), cimag(meas_wrap_ptr->poly),
+                meas_wrap_ptr->s4op/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->s4op_0/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->s4op_1/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->s4op_2/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->s4op_3/GL_SIZE/6.0/3.0);
         fclose(goutfile);
       }
 #ifdef PAR_TEMP
       if(1==rep->meas_all_reps){ // replica dependent measurements
         if(!check_file_exists(meas_wrap_ptr->pathgauge_rep_idx)){ 
           goutfile = fopen(meas_wrap_ptr->pathgauge_rep_idx,"wt");
-          fprintf(goutfile,"#conf_id\trep_lab\tacc\tplq\trect\tReP\tImP\n");
+          fprintf(goutfile,"#conf_id\trep_lab\tacc\tplq\trect\tReP\tImP\tS4OP\tS4OP_0\tS4OP_1\tS4OP_2\tS4OP_3\n");
           fclose(goutfile);
         }
         goutfile = fopen(meas_wrap_ptr->pathgauge_rep_idx,"at");
@@ -494,10 +521,15 @@ void perform_all_measurements(measure_wrapper *meas_wrap_ptr){
             rep->label[devinfo.replica_idx],
             meas_wrap_ptr->acceptance_to_print);
               
-        fprintf(goutfile,"%.18lf\t%.18lf\t%.18lf\t%.18lf\n",
+        fprintf(goutfile,"%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\t%.18lf\n",
                 meas_wrap_ptr->plq/GL_SIZE/6.0/3.0,
                 meas_wrap_ptr->rect/GL_SIZE/6.0/3.0/2.0, 
-                creal(meas_wrap_ptr->poly), cimag(meas_wrap_ptr->poly));
+                creal(meas_wrap_ptr->poly), cimag(meas_wrap_ptr->poly),
+                meas_wrap_ptr->s4op/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->s4op_0/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->s4op_1/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->s4op_2/GL_SIZE/6.0/3.0,
+                meas_wrap_ptr->s4op_3/GL_SIZE/6.0/3.0);
         fclose(goutfile);
       }
 #endif // def PAR_TEMP
@@ -556,6 +588,19 @@ void main_loop(){
   IF_PERIODIC_REPLICA(){
     meas_wrap.poly =  (*polyakov_loop[geom_par.tmap])(conf_acc);
     MPI_PRINTF1("Therm_iter %d Polyakov Loop = (%.18lf, %.18lf)  \n", conf_id_iter,creal(meas_wrap.poly),cimag(meas_wrap.poly));
+  }
+
+
+  IF_PERIODIC_REPLICA(){
+    meas_wrap.s4op = sqrt(  pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,0),2)
+                          + pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,1),2)
+                          + pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,2),2)
+                          + pow(calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,3),2));
+    meas_wrap.s4op_0 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,0);
+    meas_wrap.s4op_1 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,1);
+    meas_wrap.s4op_2 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,2);
+    meas_wrap.s4op_3 = calc_s4op_soloopenacc(conf_acc,aux_conf_acc,local_sums,3);
+    MPI_PRINTF1("Therm_iter %d |S4OP| = %.18lf  S4OP = (%.18lf, %.18lf, %.18lf, %.18lf) \n", conf_id_iter,meas_wrap.s4op/GL_SIZE/3.0/6.0,meas_wrap.s4op_0/GL_SIZE/3.0/6.0,meas_wrap.s4op_1/GL_SIZE/3.0/6.0,meas_wrap.s4op_2/GL_SIZE/3.0/6.0,meas_wrap.s4op_3/GL_SIZE/3.0/6.0);
   }
 	
   first_conf_measurement(&meas_wrap);

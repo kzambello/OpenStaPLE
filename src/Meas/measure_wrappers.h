@@ -16,6 +16,11 @@ typedef struct measure_wrapper_t {
   int id_iter_offset;
   double plq;
   double rect;
+  double s4op; // sqrt(sum(P_mu^2))
+  double s4op_0;
+  double s4op_1;
+  double s4op_2;
+  double s4op_3;
 
   d_complex poly;
 
